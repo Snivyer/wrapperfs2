@@ -79,8 +79,18 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
 
  
 
-// bug: 无法区分目录或文件是新目录，还是旧目录 (solved: 新目录或新文件将返回false)
+
+
+
 bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename) {
+
+    size_t pc_id;
+    PathLookup(path,wrapper_id, is_file, filename, pc_id);
+}
+
+// bug: 无法区分目录或文件是新目录，还是旧目录 (solved: 新目录或新文件将返回false)
+// pc_id: parent id or child id
+bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename, size_t &pc_id) {
 
     std::string path_string = path;
 
@@ -113,16 +123,21 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 
     if (WrapperLookup(wrapper_id_in_search, wrapper_id, filename)) {
         is_file = false;
+        pc_id = wrapper_id_in_search;
         return true;
     }
 
     if (EntriesLookup(wrapper_id_in_search, ino, filename)) {
         is_file = true;
         wrapper_id = wrapper_id_in_search;
+        pc_id = ino;
         return true;
     }
- 
-     return false;
+
+    wrapper_id = wrapper_id_in_search;
+    pc_id = wrapper_id_in_search;
+    return false;
+
 }
 
 // bug: 在get_entries过程中出现了段错误，原因出自于delete metadata，在这个过程中metadata的地址发生了几次变化，导致delete不掉了 (solved)
@@ -521,18 +536,10 @@ int wrapperfs::Unlink(const char *path) {
         PathResolution(path_items, wrapper_id);
     }
 
-    if(!EntriesLookup(wrapper_id, ino, filename)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("open: cannot resolved the path!");
-        }
-        return -ENOENT;
-    }
-
     entries_t* entries = new entries_t;
     entries->tag = directory_relation;
     entries->wrapper_id = wrapper_id;
 
-    // FIXME: 这里的get_entries可以进一步省掉
     if (!get_entries(adaptor_, entries)) {
         if (ENABELD_LOG) {
             spdlog::warn("unlink error, cannot get entries");
@@ -542,7 +549,7 @@ int wrapperfs::Unlink(const char *path) {
         auto it = entries->list.begin();
         while (it != entries->list.end()) {
             if (filename == (*it).second) {
-
+                ino = (*it).first;
                 // 删除元数据
                 if(!delete_inode_metadata(adaptor_, (*it).first)) {
                     if (ENABELD_LOG) {
@@ -571,6 +578,13 @@ int wrapperfs::Unlink(const char *path) {
             delete entries;
             return -ENOENT;
         }
+
+        // 删除真实的文件
+        std::string real_path = path;
+        GetFilePath(ino, real_path);
+        unlink(real_path.c_str());
+
+
         return 0;
     } else {
 
@@ -724,7 +738,6 @@ int wrapperfs::RemoveDir(const char *path) {
     }
 
     std::string filename = path_items[path_items.size() - 1];
-    size_t ino;
     size_t wrapper_id;
 
     if (!WrapperLookup(wrapper_id_in_search, wrapper_id, filename)) {
@@ -931,6 +944,117 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     return 0;
 
 }
+
+
+int wrapperfs::Rename(const char* source, const char* dest) {
+
+    // 还是需要分文件还是目录
+    bool is_file;
+    std::string source_filename, dest_filename;
+    size_t source_wrapper_id, dest_wrapper_id;
+    size_t source_ino;
+    size_t source_pc_id, dest_pc_id;
+
+    if(!PathLookup(source, source_wrapper_id, is_file, source_filename, source_pc_id)) {
+
+        if (ENABELD_LOG) {
+            spdlog::warn("rename: cannot resolved the source path!");
+        }
+         return -ENOENT;
+    }
+
+    PathLookup(dest, dest_wrapper_id, is_file, dest_filename, dest_pc_id);
+
+    if(is_file) {
+
+        // step1: 删除source的entries
+        entries_t* source_entries = new entries_t;
+        source_entries->tag = directory_relation;
+        source_entries->wrapper_id = source_wrapper_id;
+        
+        if (!get_entries(adaptor_, source_entries)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error, cannot get source file entries");
+            }
+            return -ENOENT;
+        } else {
+            auto it = source_entries->list.begin();
+            while (it != source_entries->list.end()) {
+                if (source_filename == (*it).second) {
+                    // 复制ino id
+                    source_ino = (*it).first;
+                    // 移除entry
+                    source_entries->list.erase(it);
+                    break;
+                } else {
+                    it++;
+                }
+            }
+        }
+
+        // step2: 将修改后的source_entries存回去
+        if(!put_entries(adaptor_, source_entries)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error: cannot put modified entries!");
+            }
+            return -ENONET;
+        }
+
+        // step3: 添加dest的entries
+        entries_t* dest_entries = new entries_t;
+        dest_entries->wrapper_id = dest_wrapper_id;     // mv可以到不同的目录下
+        dest_entries->tag = directory_relation;
+        
+        if (!get_entries(adaptor_, dest_entries)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error: dir isn't exist, cannot mv file into this dir!");
+            }
+            return -ENONET;
+        } 
+        
+        dest_entries->list.push_back(std::pair(source_ino, dest_filename)); 
+        if(!put_entries(adaptor_, dest_entries)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error: cannot put dest entries.");
+            }
+        }
+        return 0;
+    } else {
+
+        // step1: 删除source的relation
+        relation_t* source_relation = new relation_t;
+        source_relation->tag = directory_relation;
+        source_relation->wrapper_id = source_pc_id;
+        source_relation->distance = source_filename;
+        source_relation->next_wrapper_id = source_wrapper_id;
+
+        if(!delete_relation(adaptor_, source_relation))  {
+             
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error: cannot delete source relation!");
+            }
+            return -ENONET;
+        }
+
+        // step2: 添加dest的relation
+        relation_t* dest_relation = new relation_t;
+        dest_relation->tag = directory_relation;
+        dest_relation->wrapper_id = dest_pc_id;
+        dest_relation->distance = dest_filename;
+        dest_relation->next_wrapper_id = source_wrapper_id;
+
+        if(!put_relation(adaptor_, dest_relation))  {
+             
+            if (ENABELD_LOG) {
+                spdlog::warn("rename error: cannot put dest relation!");
+            }
+            return -ENONET;
+        }
+        return 0;
+    }
+
+ }
+
 
 
 void wrapperfs::GetFilePath(size_t ino, std::string &path) {

@@ -56,7 +56,7 @@ std::pair<std::string, std::string> decode_range_relotions(wrapper_tag tag, size
 }
 
 
-// bug: 这里的entries重新申请了， 会不会delete错
+// bug: 这里的entries重新申请了， 会不会delete错，需要自己delete (solved)
 bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
     std::string key = decode_entries(entries);
     std::string value;

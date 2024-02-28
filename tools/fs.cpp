@@ -107,7 +107,6 @@ static int wrap_unlink(const char *path) {
         spdlog::info("unlink called: path - {}", path);
     }
     return fs->Unlink(path);
-
 }
 
 static int wrap_chmod(const char *path, mode_t mode)  {
@@ -125,12 +124,21 @@ static int wrap_chown(const char *path, uid_t uid, gid_t gid) {
     return fs->Chown(path, uid, gid);
 }
 
+static int wrap_rename(const char *source, const char *dest) {
+    if (wrapperfs::ENABELD_LOG) {
+        spdlog::info("rename called: path - {} - {}", source, dest);
+    }
+    return fs->Rename(source, dest);
+}
+
+
 static struct fuse_operations operations = {
     .getattr = wrap_getattr,
     .mknod = wrap_mknod,
     .mkdir = wrap_mkdir,
     .unlink = wrap_unlink,
     .rmdir = wrap_rmdir,
+    .rename = wrap_rename,
     .chmod = wrap_chmod,
     .chown = wrap_chown,
     .open = wrap_open,

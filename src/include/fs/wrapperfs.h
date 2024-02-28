@@ -34,6 +34,7 @@ public:
     int Unlink(const char *path);
     int Chmod(const char *path, mode_t mode);
     int Chown(const char *path, uid_t uid, gid_t gid);
+    int Rename(const char* source, const char* dest);
 
 private:
     size_t max_ino;
@@ -43,6 +44,7 @@ private:
 
     void GetFilePath(size_t ino, std::string &path);
     bool PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename);
+    bool PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename, size_t &pc_id);
     bool PathResolution(std::vector<std::string> &path_items, size_t &wrapper_id_in_search);
     bool WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance);
     bool EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr);
