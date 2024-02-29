@@ -50,14 +50,27 @@ struct inode_t {
     }
 };
 
-bool get_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata);
-bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata);
-bool delete_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id);
+// inode
+class InodeHandle {
+private:
+    LevelDBAdaptor* adaptor;
+    std::unordered_map<std::string, std::string> cache;
 
-bool get_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &inode_data);
-bool put_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &inode_data);
-bool get_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* &inode);
-bool put_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* inode);
+public:
+    InodeHandle(LevelDBAdaptor* adaptor);
+    ~InodeHandle();
+
+    bool get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata);
+    bool put_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata);
+    bool delete_inode_metadata(size_t inode_id);
+
+    bool get_inode_data(size_t inode_id, inode_data_t* &inode_data);
+    bool put_inode_data(size_t inode_id, inode_data_t* &inode_data);
+    bool get_inode(size_t inode_id, inode_t* &inode);
+    bool put_inode(size_t inode_id, inode_t* inode);
+};
+
+
 
 
 }

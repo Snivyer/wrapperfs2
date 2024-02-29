@@ -42,6 +42,8 @@ private:
     size_t max_wrapper_id;
     std::string data_dir_;
     LevelDBAdaptor* adaptor_;
+    InodeHandle* inode_handle;
+    WrapperHandle* wrapper_handle;
 
 
     void GetFilePath(size_t ino, std::string &path);

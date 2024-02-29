@@ -16,18 +16,44 @@ std::string decode_inode_data(size_t inode_id) {
     return oss.str();
 }
 
-bool get_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata) {
+InodeHandle::InodeHandle(LevelDBAdaptor* adaptor) {
+    this->adaptor = adaptor;
+    cache.clear();
+}
+
+InodeHandle::~InodeHandle() {
+    cache.clear();
+    this->adaptor = NULL;
+}
+
+
+// 读取元数据需要先查缓存
+bool InodeHandle::get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
 
     io_s.metadata_read += 1;
     std::string metadata_key = decode_inode_metadata(inode_id);
     std::string metadata_value;
-    if (!adaptor->GetValue(metadata_key, metadata_value)) {
-        inode_metadata = nullptr;
 
-        if(ENABELD_LOG) {
-            spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
+    auto ret = cache.find(metadata_key);
+
+    // cache hit 
+    if(ret != cache.end()) {
+        metadata_value = ret->second;
+        io_s.metadata_cache_hit += 1;
+    } else {
+
+        if (!adaptor->GetValue(metadata_key, metadata_value)) {
+            inode_metadata = nullptr;
+            if(ENABELD_LOG) {
+                spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
+            }
+            exit(1);
         }
-        exit(1);
+
+        io_s.metadata_cache_miss += 1;
+
+        // 加入缓存
+        cache.insert(std::unordered_map<std::string, std::string>::value_type(metadata_key, metadata_value));
     }
 
     // fixme: 这里使得inode_metadata的地址发生了变化，导致在调用初没办法delete掉 (solved)
@@ -40,7 +66,7 @@ bool get_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata
 }
 
 // bug: 好像put进去的inode是乱码的 (solved, 使用&inode_metadata，而不是inode_metadata)
-bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata) {
+bool InodeHandle::put_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
     io_s.metadata_write += 1;
 
     if (inode_metadata == nullptr) {
@@ -68,7 +94,7 @@ bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata
     return true;
 }
 
-bool delete_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id) {
+bool InodeHandle::delete_inode_metadata(size_t inode_id) {
     io_s.metadata_delete += 1;
     if (ENABELD_LOG) {
         spdlog::info("delete inode metadata: {}", inode_id);
@@ -85,7 +111,7 @@ bool delete_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id) {
 
 
 
-bool get_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &inode_data) {
+bool InodeHandle::get_inode_data(size_t inode_id, inode_data_t* &inode_data) {
     std::string data_key = decode_inode_data(inode_id);
     std::string data_value;
     if (!adaptor->GetValue(data_key, data_value)) {
@@ -112,7 +138,7 @@ bool get_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &ino
     return true;
 }
 
-bool put_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &inode_data) {
+bool InodeHandle::put_inode_data(size_t inode_id, inode_data_t* &inode_data) {
     if (inode_data == nullptr) {
         {
             spdlog::error("put inode data: inode data doesn't exist");
@@ -136,14 +162,14 @@ bool put_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &ino
     return true;
 }
 
-bool get_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* &inode) {
+bool InodeHandle::get_inode(size_t inode_id, inode_t* &inode) {
     inode_metadata_t* metadata;
     inode_data_t* data;
-    if (!get_inode_metadata(adaptor, inode_id, metadata)) {
+    if (!get_inode_metadata(inode_id, metadata)) {
         inode = nullptr;
         return false;
     }
-    if (!get_inode_data(adaptor, inode_id, data)) {
+    if (!get_inode_data(inode_id, data)) {
         delete metadata;
         inode = nullptr;
         return false;
@@ -159,7 +185,7 @@ bool get_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* &inode) {
     return true;
 }
 
-bool put_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* inode) {
+bool InodeHandle::put_inode(size_t inode_id, inode_t* inode) {
     if (inode == nullptr) {
         if(ENABELD_LOG) {
             spdlog::error("put inode: inode doesn't exist");
@@ -169,11 +195,11 @@ bool put_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* inode) {
     if (ENABELD_LOG) {
         spdlog::info("put inode: {}", inode->debug());
     }
-    if (!put_inode_metadata(adaptor, inode_id, inode->metadata)) {
+    if (!put_inode_metadata(inode_id, inode->metadata)) {
         delete inode;
         return false;
     }
-    if (!put_inode_data(adaptor, inode_id, inode->data)) {
+    if (!put_inode_data(inode_id, inode->data)) {
         delete inode;
         return false;
     }

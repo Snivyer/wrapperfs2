@@ -14,6 +14,8 @@ int main(int argc, char *argv[]) {
     }
     wrapperfs::LevelDBAdaptor* adaptor_ = new wrapperfs::LevelDBAdaptor(argv[1]);
 
+    wrapperfs::WrapperHandle* handle = new wrapperfs::WrapperHandle(adaptor_);
+
 
     // 创建 ROOT_WRAPPER_ID inode
     wrapperfs::location_t* location = new wrapperfs::location_t;
@@ -23,7 +25,7 @@ int main(int argc, char *argv[]) {
     location->stat.st_ino = wrapperfs::ROOT_WRAPPER_ID;
 
 
-    if (!wrapperfs::put_location(adaptor_, location)) {
+    if (!handle->put_location(location)) {
         if (wrapperfs::ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create root wrapper!");
         }
@@ -35,7 +37,7 @@ int main(int argc, char *argv[]) {
     entries->wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
     entries->tag = wrapperfs::directory_relation;
 
-    if(!wrapperfs::put_entries(adaptor_, entries)) {
+    if(!handle->put_entries(entries)) {
         if (wrapperfs::ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create the root wrapper entries.");
         }

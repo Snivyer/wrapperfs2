@@ -39,7 +39,7 @@ std::string decode_location(location_t* location) {
     return oss.str();
 }
 
-std::pair<std::string, std::string> decode_range_relotions(wrapper_tag tag, size_t wrapper_id) {
+std::pair<std::string, std::string> decode_range_relations(wrapper_tag tag, size_t wrapper_id) {
     std::ostringstream start_key_oss;
     std::ostringstream end_key_oss;
     start_key_oss << "relations:";
@@ -56,13 +56,59 @@ std::pair<std::string, std::string> decode_range_relotions(wrapper_tag tag, size
 }
 
 
+WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
+    this->adaptor = adaptor;
+}
+
+WrapperHandle::~WrapperHandle() {
+    this->adaptor = NULL;
+   
+    for(auto item:entries_cache) {
+        
+        if(item.second != NULL) {
+            delete item.second;
+        }
+    }
+    entries_cache.clear();
+
+    for(auto item:location_cache) {
+        
+        if(item.second != NULL) {
+            delete item.second;
+        }
+    }
+    location_cache.clear();
+
+
+    for(auto item:relation_cache) {
+        
+        if(item.second != NULL) {
+            delete item.second;
+        }
+    }
+    relation_cache.clear();
+}
+
+
 // bug: 这里的entries重新申请了， 会不会delete错，需要自己delete (solved)
-bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
+// bug: 不需要delete了，因为已经缓存了
+bool WrapperHandle::get_entries(entries_t* &entries) {
     std::string key = decode_entries(entries);
     std::string value;
 
     io_s.entry_read += 1;
 
+    auto ret = entries_cache.find(key);
+    if (ret != entries_cache.end()) {
+        io_s.entry_cache_hit += 1;
+        entries = ret->second;
+
+        if (entries != NULL) {
+            return true;
+        }
+    }
+
+    io_s.entry_cache_miss += 1;
     if (!adaptor->GetValue(key, value)) {
         delete entries;
         if(ENABELD_LOG) {
@@ -71,6 +117,7 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
         return false;
     }
 
+    // FIXME: 这里为啥要这么设计
     delete entries;
     entries = new entries_t;
     try {
@@ -78,6 +125,9 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
         json.at("tag").get_to(entries->tag);
         json.at("wrapper_id").get_to(entries->wrapper_id);
         json.at("list").get_to(entries->list);
+        entries_cache.insert(std::unordered_map<std::string, entries_t*>::value_type(key, entries));
+
+
     } catch (const std::exception& e) {
         delete entries;
         if(ENABELD_LOG) {
@@ -92,7 +142,7 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
 }
 
 // 已delete
-bool put_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
+bool WrapperHandle::put_entries(entries_t* entries) {
 
     io_s.entry_write += 1;
         
@@ -122,7 +172,7 @@ bool put_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
 }
 
 // 已delete
-bool delete_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
+bool WrapperHandle::delete_entries(entries_t* entries) {
 
     io_s.entry_delete += 1;
 
@@ -146,11 +196,23 @@ bool delete_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
     return true;
 }
 
-bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
+// bug: 不需要delete了，因为已经缓存了
+bool WrapperHandle::get_relation(relation_t* &relation) {
     std::string key = decode_relation(relation);
     std::string value;
     io_s.relation_read += 1;
 
+    auto ret = relation_cache.find(key);
+    if (ret != relation_cache.end()) {
+        io_s.relation_cache_hit += 1;
+        relation = ret->second;
+
+        if (relation != NULL) {
+            return true;
+        }
+    } 
+
+    io_s.relation_cache_miss += 1;
     if (!adaptor->GetValue(key, value)) {
 
         if(ENABELD_LOG) {
@@ -165,6 +227,7 @@ bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
         json.at("wrapper_id").get_to(relation->wrapper_id);
         json.at("distance").get_to(relation->distance);
         json.at("next_wrapper_id").get_to(relation->next_wrapper_id);
+        relation_cache.insert(std::unordered_map<std::string, relation_t*>::value_type(key, relation));
     } catch (const std::exception& e) {
         relation = nullptr;
 
@@ -181,8 +244,8 @@ bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
 
 
 // 已delete
-bool put_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
-    io_s.relattion_write += 1;
+bool WrapperHandle::put_relation(relation_t* relation) {
+    io_s.relation_write += 1;
 
     if (relation == nullptr) {
 
@@ -213,7 +276,7 @@ bool put_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
 }
 
 // 已delete
-bool delete_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
+bool WrapperHandle::delete_relation(relation_t* relation) {
 
     io_s.relation_delete += 1;
 
@@ -231,11 +294,23 @@ bool delete_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
     return true;
 }
 
-bool get_location(LevelDBAdaptor* adaptor, location_t* &location) {
-
+// bug: 不需要delete了，因为已经缓存了
+bool WrapperHandle::get_location(location_t* &location) {
     io_s.location_read += 1;
     std::string key = decode_location(location);
     std::string value;
+
+    auto ret = location_cache.find(key);
+    if (ret != location_cache.end()) {
+        io_s.location_cache_hit += 1;
+        location = ret->second;
+
+        if (location != NULL) {
+            return true;
+        }
+    } 
+
+    io_s.location_cache_miss += 1;
     if (!adaptor->GetValue(key, value)) {
         if(ENABELD_LOG) {
             spdlog::warn("get location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
@@ -246,7 +321,9 @@ bool get_location(LevelDBAdaptor* adaptor, location_t* &location) {
 
     try {
         const struct stat* stat = reinterpret_cast<const struct stat *>(value.data());
-        std::memcpy(&location->stat, stat, sizeof(struct stat)); 
+        std::memcpy(&location->stat, stat, sizeof(struct stat));
+        location_cache.insert(std::unordered_map<std::string, location_t*>::value_type(key, location));
+
 
     } catch (const std::exception& e) {
         spdlog::warn("get location tag - {} wrapper_id - {}: unresolved data format", location->tag, location->wrapper_id);
@@ -259,7 +336,7 @@ bool get_location(LevelDBAdaptor* adaptor, location_t* &location) {
 }
 
 // 已delete
-bool put_location(LevelDBAdaptor* adaptor, location_t* location) {
+bool WrapperHandle::put_location(location_t* location) {
     io_s.location_write += 1;
 
     if (location == nullptr) {
@@ -285,7 +362,7 @@ bool put_location(LevelDBAdaptor* adaptor, location_t* location) {
 }
 
 // 已delete
-bool delete_location(LevelDBAdaptor* adaptor, location_t* location) {
+bool WrapperHandle::delete_location(location_t* location) {
 
     io_s.location_delete += 1;
     std::string key = decode_location(location);
@@ -303,12 +380,12 @@ bool delete_location(LevelDBAdaptor* adaptor, location_t* location) {
 
 }
 
-bool get_range_relations(LevelDBAdaptor* adaptor, wrapper_tag tag, size_t wrapper_id, std::vector<relation_t> &relations) {
+bool WrapperHandle::get_range_relations(wrapper_tag tag, size_t wrapper_id, std::vector<relation_t> &relations) {
     
     io_s.relation_range_read += 1;
 
     relations.clear();
-    std::pair<std::string, std::string> keys = decode_range_relotions(tag, wrapper_id);
+    std::pair<std::string, std::string> keys = decode_range_relations(tag, wrapper_id);
     std::vector<std::pair<std::string, std::string>> key_value_pair_list;
     if (!adaptor->GetRange(keys.first, keys.second, key_value_pair_list)) {
         if(ENABELD_LOG) {
