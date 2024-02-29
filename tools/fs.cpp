@@ -131,6 +131,14 @@ static int wrap_rename(const char *source, const char *dest) {
     return fs->Rename(source, dest);
 }
 
+void wrap_destroy(void *data) {
+    if (wrapperfs::ENABELD_LOG) {
+        spdlog::info("destrory called");
+    }
+    return fs->Destroy(data);
+
+}
+
 
 static struct fuse_operations operations = {
     .getattr = wrap_getattr,
@@ -148,9 +156,9 @@ static struct fuse_operations operations = {
     .opendir = wrap_opendir,
     .readdir = wrap_readdir,
     .releasedir = wrap_releasedir,
+    .destroy = wrap_destroy,
     .access = wrap_access,
     .utimens = wrap_updatetime,
-
 };
 
 int main(int argc, char *argv[]) {
@@ -172,7 +180,7 @@ int main(int argc, char *argv[]) {
     std::cout << "meta_dir:" << argv[3] << std::endl;
     std::cout << "log_dir:" << argv[4] << std::endl;
 
-    if (wrapperfs::ENABELD_LOG) {
+    if (wrapperfs::STATISTICS_LOG) {
         spdlog::info("mount_dir: {}", argv[1]);
         spdlog::info("data_dir: {}", argv[2]);
         spdlog::info("meta_dir: {}", argv[3]);

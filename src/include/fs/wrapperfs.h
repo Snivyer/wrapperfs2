@@ -35,12 +35,14 @@ public:
     int Chmod(const char *path, mode_t mode);
     int Chown(const char *path, uid_t uid, gid_t gid);
     int Rename(const char* source, const char* dest);
+    void Destroy(void *data);
 
 private:
     size_t max_ino;
     size_t max_wrapper_id;
     std::string data_dir_;
     LevelDBAdaptor* adaptor_;
+
 
     void GetFilePath(size_t ino, std::string &path);
     bool PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename);

@@ -61,9 +61,13 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
     std::string key = decode_entries(entries);
     std::string value;
 
+    io_s.entry_read += 1;
+
     if (!adaptor->GetValue(key, value)) {
         delete entries;
-        spdlog::warn("get entries tag - {} wrapper_id - {}: entries doesn't exist", entries->tag, entries->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("get entries tag - {} wrapper_id - {}: entries doesn't exist", entries->tag, entries->wrapper_id);
+        }
         return false;
     }
 
@@ -76,7 +80,9 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
         json.at("list").get_to(entries->list);
     } catch (const std::exception& e) {
         delete entries;
-        spdlog::warn("get entries tag - {} wrapper_id - {}: unresolved data format", entries->tag, entries->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("get entries tag - {} wrapper_id - {}: unresolved data format", entries->tag, entries->wrapper_id);
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -86,9 +92,14 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
 }
 
 // 已delete
-    bool put_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
+bool put_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
+
+    io_s.entry_write += 1;
+        
     if (entries == nullptr) {
-        spdlog::warn("put entries: entries doesn't exist");
+        if(ENABELD_LOG) {
+            spdlog::warn("put entries: entries doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -101,7 +112,9 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
     std::string value = json.dump();
     if (!adaptor->Insert(key, value)) {
         delete entries;
-        spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
+        }
         exit(1);
     }
     delete entries;
@@ -111,15 +124,21 @@ bool get_entries(LevelDBAdaptor* adaptor, entries_t* &entries) {
 // 已delete
 bool delete_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
 
+    io_s.entry_delete += 1;
+
     if (entries == nullptr) {
-        spdlog::warn("delete entries: entries doesn't exist");
+        if(ENABELD_LOG) {
+            spdlog::warn("delete entries: entries doesn't exist");
+        }
         exit(1);
     }
     std::string key = decode_entries(entries);
 
     if(!adaptor->Remove(key)) {
         delete entries;
-        spdlog::warn("delete entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("delete entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
+        }
         exit(1);
     }
 
@@ -130,9 +149,13 @@ bool delete_entries(LevelDBAdaptor* adaptor, entries_t* entries) {
 bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
     std::string key = decode_relation(relation);
     std::string value;
+    io_s.relation_read += 1;
 
     if (!adaptor->GetValue(key, value)) {
-        spdlog::warn("cannot get relation");
+
+        if(ENABELD_LOG) {
+            spdlog::warn("cannot get relation");
+        }
         return false;
     }
 
@@ -144,7 +167,10 @@ bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
         json.at("next_wrapper_id").get_to(relation->next_wrapper_id);
     } catch (const std::exception& e) {
         relation = nullptr;
-        spdlog::warn("get relation tag - {} wrapper_id - {} distance - {}: unresolved data format", relation->tag, relation->wrapper_id, relation->distance);
+
+        if(ENABELD_LOG) {
+            spdlog::warn("get relation tag - {} wrapper_id - {} distance - {}: unresolved data format", relation->tag, relation->wrapper_id, relation->distance);
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -156,8 +182,13 @@ bool get_relation(LevelDBAdaptor* adaptor, relation_t* &relation) {
 
 // 已delete
 bool put_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
+    io_s.relattion_write += 1;
+
     if (relation == nullptr) {
-        spdlog::warn("put relation: relation doesn't exist");
+
+        if(ENABELD_LOG) {
+            spdlog::warn("put relation: relation doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -172,7 +203,9 @@ bool put_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
     std::string value = json.dump();
     if (!adaptor->Insert(key, value)) {
         delete relation;
-        spdlog::warn("put relation tag - {} wrapper_id - {} distance - {}: kv store interanl error", relation->tag, relation->wrapper_id, relation->distance);
+        if(ENABELD_LOG) {
+            spdlog::warn("put relation tag - {} wrapper_id - {} distance - {}: kv store interanl error", relation->tag, relation->wrapper_id, relation->distance);
+        }
         exit(1);
     }
     delete relation;
@@ -182,10 +215,14 @@ bool put_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
 // 已delete
 bool delete_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
 
+    io_s.relation_delete += 1;
+
     std::string key = decode_relation(relation);
 
     if (!adaptor->Remove(key)) {
-        spdlog::warn("cannot delete relation");
+        if(ENABELD_LOG) {
+            spdlog::warn("cannot delete relation");
+        }
         delete relation;
         return false;
     }
@@ -194,13 +231,15 @@ bool delete_relation(LevelDBAdaptor* adaptor, relation_t* relation) {
     return true;
 }
 
-
-
 bool get_location(LevelDBAdaptor* adaptor, location_t* &location) {
+
+    io_s.location_read += 1;
     std::string key = decode_location(location);
     std::string value;
     if (!adaptor->GetValue(key, value)) {
-        spdlog::warn("get location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("get location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
+        }
         delete location;
         return false;
     }
@@ -219,11 +258,14 @@ bool get_location(LevelDBAdaptor* adaptor, location_t* &location) {
     return true;
 }
 
-
 // 已delete
 bool put_location(LevelDBAdaptor* adaptor, location_t* location) {
+    io_s.location_write += 1;
+
     if (location == nullptr) {
-        spdlog::warn("put location: location doesn't exist");
+        if(ENABELD_LOG) {
+            spdlog::warn("put location: location doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -232,7 +274,9 @@ bool put_location(LevelDBAdaptor* adaptor, location_t* location) {
     std::string key = decode_location(location);
     std::string stat_value = std::string(reinterpret_cast<const char*>(&location->stat), sizeof(struct stat));
     if (!adaptor->Insert(key, stat_value)) {
-        spdlog::warn("put location tag - {} wrapper_id - {}: kv store interanl error", location->tag, location->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("put location tag - {} wrapper_id - {}: kv store interanl error", location->tag, location->wrapper_id);
+        }
         delete location;
         exit(1);
     }
@@ -243,10 +287,13 @@ bool put_location(LevelDBAdaptor* adaptor, location_t* location) {
 // 已delete
 bool delete_location(LevelDBAdaptor* adaptor, location_t* location) {
 
+    io_s.location_delete += 1;
     std::string key = decode_location(location);
 
     if (!adaptor->Remove(key)) {
-        spdlog::warn("delete location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("delete location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
+        }
         delete location;
         return false;
     }
@@ -257,11 +304,16 @@ bool delete_location(LevelDBAdaptor* adaptor, location_t* location) {
 }
 
 bool get_range_relations(LevelDBAdaptor* adaptor, wrapper_tag tag, size_t wrapper_id, std::vector<relation_t> &relations) {
+    
+    io_s.relation_range_read += 1;
+
     relations.clear();
     std::pair<std::string, std::string> keys = decode_range_relotions(tag, wrapper_id);
     std::vector<std::pair<std::string, std::string>> key_value_pair_list;
     if (!adaptor->GetRange(keys.first, keys.second, key_value_pair_list)) {
-        spdlog::warn("get range relations tag - {} wrapper_id - {}: kv store interanl error", tag, wrapper_id);
+        if(ENABELD_LOG) {
+            spdlog::warn("get range relations tag - {} wrapper_id - {}: kv store interanl error", tag, wrapper_id);
+        }
         exit(1);
     }
     for (auto &key_value_pair : key_value_pair_list) {
@@ -273,7 +325,9 @@ bool get_range_relations(LevelDBAdaptor* adaptor, wrapper_tag tag, size_t wrappe
             json.at("distance").get_to(relation.distance);
             json.at("next_wrapper_id").get_to(relation.next_wrapper_id);
         } catch (const std::exception& e) {
-            spdlog::warn("get range relations tag - {} wrapper_id - {}: unresolved data format", tag, wrapper_id);
+            if(ENABELD_LOG) {
+                spdlog::warn("get range relations tag - {} wrapper_id - {}: unresolved data format", tag, wrapper_id);
+            }
             exit(1);
         }
         if (ENABELD_LOG) {

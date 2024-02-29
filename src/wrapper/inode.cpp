@@ -17,11 +17,16 @@ std::string decode_inode_data(size_t inode_id) {
 }
 
 bool get_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata) {
+
+    io_s.metadata_read += 1;
     std::string metadata_key = decode_inode_metadata(inode_id);
     std::string metadata_value;
     if (!adaptor->GetValue(metadata_key, metadata_value)) {
         inode_metadata = nullptr;
-        spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
+
+        if(ENABELD_LOG) {
+            spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
+        }
         exit(1);
     }
 
@@ -36,8 +41,12 @@ bool get_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata
 
 // bug: 好像put进去的inode是乱码的 (solved, 使用&inode_metadata，而不是inode_metadata)
 bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata_t* &inode_metadata) {
+    io_s.metadata_write += 1;
+
     if (inode_metadata == nullptr) {
-        spdlog::error("put inode metadata: inode metadata doesn't exist");
+        if(ENABELD_LOG) {
+            spdlog::error("put inode metadata: inode metadata doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
@@ -50,7 +59,9 @@ bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata
  
     if (!adaptor->Insert(metadata_key, metadata_value)) {
         delete inode_metadata;
-        spdlog::error("put inode metadata inode_id - {}: kv store interanl error", inode_id);
+        if(ENABELD_LOG) {
+            spdlog::error("put inode metadata inode_id - {}: kv store interanl error", inode_id);
+        }
         exit(1);
     }
     delete inode_metadata;
@@ -58,6 +69,7 @@ bool put_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id, inode_metadata
 }
 
 bool delete_inode_metadata(LevelDBAdaptor* adaptor, size_t inode_id) {
+    io_s.metadata_delete += 1;
     if (ENABELD_LOG) {
         spdlog::info("delete inode metadata: {}", inode_id);
     }
@@ -87,22 +99,30 @@ bool get_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &ino
         inode_data->map = json_map.get<std::unordered_map<std::string, std::string>>();
     } catch (const std::exception& e) {
         inode_data = nullptr;
-        spdlog::error("get inode data inode_id -{}: unresolved data format", inode_id);
+        if(ENABELD_LOG) {
+            spdlog::error("get inode data inode_id -{}: unresolved data format", inode_id);
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
-        spdlog::info("get inode metadata: {}", inode_data->debug());
+        if(ENABELD_LOG) {
+            spdlog::info("get inode metadata: {}", inode_data->debug());
+        }
     }
     return true;
 }
 
 bool put_inode_data(LevelDBAdaptor* adaptor, size_t inode_id, inode_data_t* &inode_data) {
     if (inode_data == nullptr) {
-        spdlog::error("put inode data: inode data doesn't exist");
+        {
+            spdlog::error("put inode data: inode data doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {
-        spdlog::info("put inode data: {}", inode_data->debug());
+        {
+            spdlog::info("put inode data: {}", inode_data->debug());
+        }
     }
     std::string data_key = decode_inode_data(inode_id);
     nlohmann::json json_map = inode_data->map;
@@ -141,7 +161,9 @@ bool get_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* &inode) {
 
 bool put_inode(LevelDBAdaptor* adaptor, size_t inode_id, inode_t* inode) {
     if (inode == nullptr) {
-        spdlog::error("put inode: inode doesn't exist");
+        if(ENABELD_LOG) {
+            spdlog::error("put inode: inode doesn't exist");
+        }
         exit(1);
     }
     if (ENABELD_LOG) {

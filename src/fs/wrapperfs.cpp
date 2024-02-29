@@ -243,6 +243,8 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
     size_t wrapper_id;
     size_t ino;
 
+    op_s.getattr += 1;
+
     if(!PathLookup(path, wrapper_id, is_file, filename)) {
 
         if (ENABELD_LOG) {
@@ -252,13 +254,16 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
     }
 
     if (is_file == true)   {
+        op_s.getFileStat += 1;
         if(!GetFileStat(wrapper_id, filename, ino, statbuf)) {
+
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
             }
             return -ENOENT;
         }  
     } else {
+        op_s.getDirStat += 1;
         if(!GetWrapperStat(wrapper_id, statbuf)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
@@ -266,7 +271,7 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
             return -ENOENT; 
         } 
     }
-
+    op_s.getNULLStat += 1;
     return 0;
 }
 
@@ -314,6 +319,8 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
     std::string filename = path_items[path_items.size() - 1];
 
+    op_s.mknod += 1;
+
     if (path_items.size() > 1 ) {
         PathResolution(path_items, wrapper_id);
     }
@@ -359,6 +366,8 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     size_t wrapper_id = ROOT_WRAPPER_ID;
     std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
     std::string filename = path_items[path_items.size() - 1];
+
+    op_s.mkdir += 1;
 
     if (path_items.size() > 1 ) {
         PathResolution(path_items, wrapper_id);
@@ -423,6 +432,8 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     size_t ino;
     file_handle_t* fh = new file_handle_t;
 
+    op_s.open += 1;
+
     size_t wrapper_id = ROOT_WRAPPER_ID;
     std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
     filename = path_items[path_items.size() - 1];
@@ -474,6 +485,8 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     std::string path_string = path;
     file_handle_t* fh = reinterpret_cast<file_handle_t*> (file_info->fh);
 
+    op_s.read += 1;
+
     if (fh->fd < 0) { 
         GetFilePath(fh->ino, path_string);
         fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat.st_mode);
@@ -496,6 +509,7 @@ int wrapperfs::Write(const char* path, const char* buf, size_t size, off_t offse
 
    std::string path_string = path;
    file_handle_t* fh = reinterpret_cast<file_handle_t*> (file_info->fh);
+   op_s.write += 1;
 
     if (fh->fd < 0) {
         GetFilePath(fh->ino, path_string);
@@ -528,6 +542,8 @@ int wrapperfs::Unlink(const char *path) {
     size_t ino;
     bool is_remove = false;
     size_t wrapper_id = ROOT_WRAPPER_ID;
+
+    op_s.unlink += 1;
 
     std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
     filename = path_items[path_items.size() - 1];
@@ -600,6 +616,7 @@ int wrapperfs::Unlink(const char *path) {
 int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
 
     file_handle_t* fh = reinterpret_cast<file_handle_t*> (file_info->fh);
+    op_s.release += 1;
 
     fh->stat.st_atim.tv_sec  = time(NULL);
     fh->stat.st_atim.tv_nsec = 0;
@@ -626,6 +643,7 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
 
     bool is_file;
     std::string filename;
+    op_s.opendir += 1;
 
     location_t *locate = new location_t();
     locate->tag = directory_relation;
@@ -654,6 +672,7 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
  int wrapperfs::Readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* file_info) {
 
     location_t* locate = (location_t *) file_info->fh;
+    op_s.readdir += 1;
 
     if (filler(buf, ".", NULL, 0) < 0) {
         if (ENABELD_LOG) {
@@ -722,6 +741,8 @@ int wrapperfs::RemoveDir(const char *path) {
     std::string path_string = path;
     std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
     size_t wrapper_id_in_search = ROOT_WRAPPER_ID;
+
+    op_s.rmdir += 1;
 
     // 解析根目录和包装器标签目录
     if (path_items.size() < 2) {
@@ -794,6 +815,7 @@ int wrapperfs::RemoveDir(const char *path) {
 int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
     location_t *locate = reinterpret_cast<location_t*> (file_info->fh);
+    op_s.releasedir += 1;
 
     // 释放句柄
     if (locate != NULL) {
@@ -812,6 +834,8 @@ int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
 int wrapperfs::Access(const char* path, int mask) {
 
+    op_s.access += 1;
+
     if (ENABELD_LOG) {
         spdlog::debug("access: %s %08x\n", path, mask);
     }
@@ -826,6 +850,7 @@ int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
     struct stat stat;
     std::string filename;
     size_t ino;
+    op_s.utimens += 1;
 
     size_t wrapper_id = ROOT_WRAPPER_ID;
     std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
@@ -872,6 +897,8 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     size_t ino;
     struct stat statbuf;
 
+    op_s.chmod += 1;
+
     if(!PathLookup(path, wrapper_id, is_file, filename)) {
 
         if (ENABELD_LOG) {
@@ -910,6 +937,8 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     size_t wrapper_id;
     size_t ino;
     struct stat statbuf;
+
+    op_s.chown += 1;
 
     if(!PathLookup(path, wrapper_id, is_file, filename)) {
 
@@ -954,6 +983,7 @@ int wrapperfs::Rename(const char* source, const char* dest) {
     size_t source_wrapper_id, dest_wrapper_id;
     size_t source_ino;
     size_t source_pc_id, dest_pc_id;
+    op_s.rename += 1;
 
     if(!PathLookup(source, source_wrapper_id, is_file, source_filename, source_pc_id)) {
 
@@ -1055,7 +1085,13 @@ int wrapperfs::Rename(const char* source, const char* dest) {
 
  }
 
+ void wrapperfs::Destroy(void *data) {
 
+    if (STATISTICS_LOG) {
+        spdlog::info("IO statics {}", io_s.debug());
+        spdlog::info("operation statics {}", op_s.debug());
+    }
+ }
 
 void wrapperfs::GetFilePath(size_t ino, std::string &path) {
     std::stringstream ss;
