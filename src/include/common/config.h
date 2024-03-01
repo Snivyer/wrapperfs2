@@ -169,7 +169,7 @@ struct IO_Statistic {
         s << "\t";
         s << "location_cache_hit:" << location_cache_hit;
         s << "\t";  
-        s << "location_cache_hit:" << location_cache_miss;
+        s << "location_cache_miss:" << location_cache_miss;
         s << "\t";
         s << "location_write:" << location_write;
         s << "\t";

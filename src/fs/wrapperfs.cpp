@@ -52,8 +52,6 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
         next_wrapper_id = relation->next_wrapper_id;
         return true;
     }
-
-    delete relation;
     return false;
  }
 
@@ -64,7 +62,7 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
     entries->wrapper_id = wrapper_id;
 
     // 如果能够找到，那么就是文件
-    if (wrapper_handle->get_entries(entries)) {
+     if (wrapper_handle->get_entries(entries)) {
         for (auto &entry : entries->list) {
             if (primary_attr == entry.second) {
                 ino = entry.first;
@@ -136,41 +134,21 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 
 // bug: 在get_entries过程中出现了段错误，原因出自于delete metadata，在这个过程中metadata的地址发生了几次变化，导致delete不掉了 (solved)
 // bug: 在get_entries过程中出现了段错误 (solved 查找成功可以delete，查找失败则不能)
-bool wrapperfs::GetFileStat(size_t wrapper_id, std::string filename, size_t &ino, struct stat *stat) {
+// FIXME: 这里的逻辑可以省略，直接拿metadata就行
+bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
 
-    entries_t* entries = new entries_t;
-    entries->tag = directory_relation;
-    entries->wrapper_id = wrapper_id;
+    
+    inode_metadata_t* metadata = new inode_metadata_t;
 
-    if (!wrapper_handle->get_entries(entries)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("getStat error, single file");
-        }
-        return false;
-    } else {
-        for (auto &entry : entries->list) {
-            if (filename == entry.second) {
-                ino = entry.first;
-                inode_metadata_t* metadata = new inode_metadata_t;
-
-                if (!inode_handle->get_inode_metadata(entry.first, metadata)) {
-                    if (ENABELD_LOG) {
-                        spdlog::warn("getStat error, single file");
-                    }
-                    return false;
-                } else {
-                    std::memcpy(stat, &metadata->stat, sizeof(struct stat));
-                    return true;
-                }
+        if (!inode_handle->get_inode_metadata(ino, metadata)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("getStat error, single file");
             }
+                return false;
+        } else {
+            std::memcpy(stat, &metadata->stat, sizeof(struct stat));
+            return true;
         }
-
-        if (ENABELD_LOG) {
-            spdlog::warn("getStat error, single file");
-        }
-        delete entries;
-        return false;
-    }
 }
 
 bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
@@ -189,6 +167,7 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
     }  
 }
 
+
 bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
     
     inode_metadata_t *metadata = new inode_metadata_t;
@@ -198,7 +177,6 @@ bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: put file stat error");
         }
-        delete metadata;
         return -ENONET;
     }
 
@@ -216,7 +194,6 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create directory wrapper.");
         }
-        delete locate; 
         return -ENONET;
     }
 
@@ -233,8 +210,9 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
 
     op_s.getattr += 1;
 
-    if(!PathLookup(path, wrapper_id, is_file, filename)) {
+    if(!PathLookup(path, wrapper_id, is_file, filename, ino)) {
 
+        op_s.getNULLStat += 1;
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot resolved the path!");
         }
@@ -243,7 +221,7 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
 
     if (is_file == true)   {
         op_s.getFileStat += 1;
-        if(!GetFileStat(wrapper_id, filename, ino, statbuf)) {
+        if(!GetFileStat(ino, statbuf)) {
 
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
@@ -259,7 +237,6 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
             return -ENOENT; 
         } 
     }
-    op_s.getNULLStat += 1;
     return 0;
 }
 
@@ -330,7 +307,7 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     entries->tag = directory_relation;
     
 
-    // bug: 这里的缓存会失效！
+    // bug: 这里的缓存会失效！（solved）
     if (!wrapper_handle->get_entries(entries)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot get name metadata.");
@@ -343,7 +320,6 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot put name metadata into db.");
         }
-        delete entries;
         return -ENONET;
     }
 
@@ -379,7 +355,6 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create directory wrapper.");
         }
-        delete locate; 
         return -ENONET;
     }
 
@@ -395,7 +370,6 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create the relation of dirctory wrapper.");
         }
-        delete relation; 
         return -ENONET;
     }
 
@@ -408,8 +382,6 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
         if (ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create empty entries.");
         }
-
-        delete entries;
         return -ENONET;
     }
     return 0;
@@ -439,7 +411,7 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
         return -ENOENT;
     }
 
-    if(!GetFileStat(wrapper_id, filename, ino, &(fh->stat))) {
+    if(!GetFileStat(ino, &(fh->stat))) {
 
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
@@ -580,7 +552,6 @@ int wrapperfs::Unlink(const char *path) {
             if (ENABELD_LOG) {
                 spdlog::warn("delete file error, can not put deleted entries");
             }
-            delete entries;
             return -ENOENT;
         }
 
@@ -596,7 +567,6 @@ int wrapperfs::Unlink(const char *path) {
         if (ENABELD_LOG) {
             spdlog::warn("delete file error, can not find the deleted file.");
         }
-        delete entries;
         return -ENOENT;
     }
 }
@@ -692,7 +662,6 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
                 if (ENABELD_LOG) {
                     spdlog::warn("readdir error, cannot filler filename");
                 }
-                delete entries;
                 return -ENOENT;
             } else {
                 continue;
@@ -807,7 +776,6 @@ int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
     // 释放句柄
     if (locate != NULL) {
-        delete locate;
         file_info->fh = -1;
         return 0;
     } else {
@@ -855,7 +823,7 @@ int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
         return -ENOENT;
     }
 
-    if(!GetFileStat(wrapper_id, filename, ino, &stat)) {
+    if(!GetFileStat(ino, &stat)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
         }
@@ -896,7 +864,7 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     }
 
     if (is_file == true)   {
-        if(!GetFileStat(wrapper_id, filename, ino, &statbuf)) {
+        if(!GetFileStat(ino, &statbuf)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
             }
@@ -937,7 +905,7 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     }
 
     if (is_file == true)   {
-        if(!GetFileStat(wrapper_id, filename, ino, &statbuf)) {
+        if(!GetFileStat(ino, &statbuf)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
             }

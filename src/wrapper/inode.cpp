@@ -23,11 +23,11 @@ InodeHandle::InodeHandle(LevelDBAdaptor* adaptor) {
 
 InodeHandle::~InodeHandle() {
     cache.clear();
-    this->adaptor = NULL;
+    this->adaptor = nullptr;
 }
 
 
-// 读取元数据需要先查缓存
+
 bool InodeHandle::get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
 
     io_s.metadata_read += 1;
@@ -43,7 +43,9 @@ bool InodeHandle::get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_m
     } else {
 
         if (!adaptor->GetValue(metadata_key, metadata_value)) {
+            delete inode_metadata;
             inode_metadata = nullptr;
+            
             if(ENABELD_LOG) {
                 spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
             }
@@ -66,7 +68,9 @@ bool InodeHandle::get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_m
 }
 
 // bug: 好像put进去的inode是乱码的 (solved, 使用&inode_metadata，而不是inode_metadata)
+// bug: 这里可能存在缓存失效的问题 (solved, 在重写之前将缓存删除即可)
 bool InodeHandle::put_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
+    
     io_s.metadata_write += 1;
 
     if (inode_metadata == nullptr) {
@@ -90,7 +94,13 @@ bool InodeHandle::put_inode_metadata(size_t inode_id, inode_metadata_t* &inode_m
         }
         exit(1);
     }
-    delete inode_metadata;
+
+    auto ret = cache.find(metadata_key);
+    if(ret != cache.end()) {
+        cache.erase(metadata_key);
+    }
+    cache.insert(std::unordered_map<std::string, std::string>::value_type(metadata_key, metadata_value));
+
     return true;
 }
 
@@ -102,14 +112,17 @@ bool InodeHandle::delete_inode_metadata(size_t inode_id) {
 
     std::string metadata_key = decode_inode_metadata(inode_id);
 
+    auto ret = cache.find(metadata_key);
+    if(ret != cache.end()) {
+        cache.erase(metadata_key);
+    }
+
     if(!adaptor->Remove(metadata_key)) {
         spdlog::error("delete inode metadata inode_id - {}: kv store interanl error", inode_id);
         exit(1);
     }
     return true;
 }
-
-
 
 bool InodeHandle::get_inode_data(size_t inode_id, inode_data_t* &inode_data) {
     std::string data_key = decode_inode_data(inode_id);

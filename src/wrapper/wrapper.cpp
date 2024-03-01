@@ -61,11 +61,11 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 }
 
 WrapperHandle::~WrapperHandle() {
-    this->adaptor = NULL;
+    this->adaptor = nullptr;
    
     for(auto item:entries_cache) {
         
-        if(item.second != NULL) {
+        if(item.second != nullptr) {
             delete item.second;
         }
     }
@@ -73,7 +73,7 @@ WrapperHandle::~WrapperHandle() {
 
     for(auto item:location_cache) {
         
-        if(item.second != NULL) {
+        if(item.second != nullptr) {
             delete item.second;
         }
     }
@@ -82,7 +82,7 @@ WrapperHandle::~WrapperHandle() {
 
     for(auto item:relation_cache) {
         
-        if(item.second != NULL) {
+        if(item.second != nullptr) {
             delete item.second;
         }
     }
@@ -100,12 +100,14 @@ bool WrapperHandle::get_entries(entries_t* &entries) {
 
     auto ret = entries_cache.find(key);
     if (ret != entries_cache.end()) {
+
+        // 先删除外面构造的
+        if (entries!= nullptr) {
+            delete entries;
+        }
         io_s.entry_cache_hit += 1;
         entries = ret->second;
-
-        if (entries != NULL) {
-            return true;
-        }
+        return true;
     }
 
     io_s.entry_cache_miss += 1;
@@ -117,19 +119,15 @@ bool WrapperHandle::get_entries(entries_t* &entries) {
         return false;
     }
 
-    // FIXME: 这里为啥要这么设计
-    delete entries;
-    entries = new entries_t;
     try {
         nlohmann::json json = nlohmann::json::parse(value);
         json.at("tag").get_to(entries->tag);
         json.at("wrapper_id").get_to(entries->wrapper_id);
         json.at("list").get_to(entries->list);
         entries_cache.insert(std::unordered_map<std::string, entries_t*>::value_type(key, entries));
-
-
     } catch (const std::exception& e) {
         delete entries;
+        entries = nullptr;
         if(ENABELD_LOG) {
             spdlog::warn("get entries tag - {} wrapper_id - {}: unresolved data format", entries->tag, entries->wrapper_id);
         }
@@ -161,13 +159,20 @@ bool WrapperHandle::put_entries(entries_t* entries) {
                                           {"list", entries->list}};
     std::string value = json.dump();
     if (!adaptor->Insert(key, value)) {
-        delete entries;
         if(ENABELD_LOG) {
             spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
         }
+        delete entries;
+        entries = nullptr;
         exit(1);
     }
-    delete entries;
+
+    // 写入的时候，先把缓存里的旧的删除，然后加入新的
+    auto ret = entries_cache.find(key);
+    if (ret != entries_cache.end()) {
+        entries_cache.erase(key);
+    }
+    entries_cache.insert(std::unordered_map<std::string, entries_t*>::value_type(key, entries));
     return true;
 }
 
@@ -183,6 +188,11 @@ bool WrapperHandle::delete_entries(entries_t* entries) {
         exit(1);
     }
     std::string key = decode_entries(entries);
+        // 删除缓存
+    auto ret = entries_cache.find(key);
+    if (ret != entries_cache.end()) {
+        entries_cache.erase(key);
+    }
 
     if(!adaptor->Remove(key)) {
         delete entries;
@@ -193,6 +203,7 @@ bool WrapperHandle::delete_entries(entries_t* entries) {
     }
 
     delete entries;
+    entries = nullptr;
     return true;
 }
 
@@ -204,12 +215,14 @@ bool WrapperHandle::get_relation(relation_t* &relation) {
 
     auto ret = relation_cache.find(key);
     if (ret != relation_cache.end()) {
+
+        // 先删除外面构造的
+        if (relation!= nullptr) {
+            delete relation;
+        }
         io_s.relation_cache_hit += 1;
         relation = ret->second;
-
-        if (relation != NULL) {
-            return true;
-        }
+        return true;
     } 
 
     io_s.relation_cache_miss += 1;
@@ -218,6 +231,7 @@ bool WrapperHandle::get_relation(relation_t* &relation) {
         if(ENABELD_LOG) {
             spdlog::warn("cannot get relation");
         }
+        delete relation;
         return false;
     }
 
@@ -228,7 +242,9 @@ bool WrapperHandle::get_relation(relation_t* &relation) {
         json.at("distance").get_to(relation->distance);
         json.at("next_wrapper_id").get_to(relation->next_wrapper_id);
         relation_cache.insert(std::unordered_map<std::string, relation_t*>::value_type(key, relation));
+
     } catch (const std::exception& e) {
+        delete relation;
         relation = nullptr;
 
         if(ENABELD_LOG) {
@@ -265,28 +281,40 @@ bool WrapperHandle::put_relation(relation_t* relation) {
                                           {"next_wrapper_id", relation->next_wrapper_id}};
     std::string value = json.dump();
     if (!adaptor->Insert(key, value)) {
-        delete relation;
         if(ENABELD_LOG) {
             spdlog::warn("put relation tag - {} wrapper_id - {} distance - {}: kv store interanl error", relation->tag, relation->wrapper_id, relation->distance);
         }
+        delete relation;
+        relation = nullptr;
         exit(1);
     }
-    delete relation;
+
+    auto ret = relation_cache.find(key);
+    if (ret != relation_cache.end()) {
+        relation_cache.erase(key);
+    }
+    relation_cache.insert(std::unordered_map<std::string, relation_t*>::value_type(key, relation));
     return true;
 }
 
 // 已delete
 bool WrapperHandle::delete_relation(relation_t* relation) {
 
+ 
     io_s.relation_delete += 1;
-
     std::string key = decode_relation(relation);
+
+    auto ret = relation_cache.find(key);
+    if (ret != relation_cache.end()) {
+        relation_cache.erase(key);
+    }
 
     if (!adaptor->Remove(key)) {
         if(ENABELD_LOG) {
             spdlog::warn("cannot delete relation");
         }
         delete relation;
+        relation = nullptr;
         return false;
     }
 
@@ -302,12 +330,15 @@ bool WrapperHandle::get_location(location_t* &location) {
 
     auto ret = location_cache.find(key);
     if (ret != location_cache.end()) {
+
+         // 先删除外面构造的
+        if (location!= nullptr) {
+            delete location;
+        }
+
         io_s.location_cache_hit += 1;
         location = ret->second;
-
-        if (location != NULL) {
-            return true;
-        }
+        return true;
     } 
 
     io_s.location_cache_miss += 1;
@@ -316,6 +347,7 @@ bool WrapperHandle::get_location(location_t* &location) {
             spdlog::warn("get location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
         }
         delete location;
+        location = nullptr;
         return false;
     }
 
@@ -355,31 +387,47 @@ bool WrapperHandle::put_location(location_t* location) {
             spdlog::warn("put location tag - {} wrapper_id - {}: kv store interanl error", location->tag, location->wrapper_id);
         }
         delete location;
+        location = nullptr;
         exit(1);
     }
-    delete location;
+    
+    auto ret = location_cache.find(key);
+    if (ret != location_cache.end()) {
+        location_cache.erase(key);   
+    }
+    location_cache.insert(std::unordered_map<std::string, location_t*>::value_type(key, location));
     return true;
 }
 
 // 已delete
 bool WrapperHandle::delete_location(location_t* location) {
 
+
     io_s.location_delete += 1;
     std::string key = decode_location(location);
+
+    auto ret = location_cache.find(key);
+    if (ret != location_cache.end()) {
+        location_cache.erase(key);
+    }
 
     if (!adaptor->Remove(key)) {
         if(ENABELD_LOG) {
             spdlog::warn("delete location tag - {} wrapper_id - {}: location doesn't exist", location->tag, location->wrapper_id);
         }
         delete location;
+        location = nullptr;
         return false;
     }
-
+    
     delete location;
+    location = nullptr;
     return true;
 
 }
 
+
+// FIXME: 这里的地址我没有管
 bool WrapperHandle::get_range_relations(wrapper_tag tag, size_t wrapper_id, std::vector<relation_t> &relations) {
     
     io_s.relation_range_read += 1;
