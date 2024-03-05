@@ -2,222 +2,87 @@
 
 namespace wrapperfs {
 
-std::string decode_inode_metadata(size_t inode_id) {
-    std::ostringstream oss;
-    oss << "inode_metadata:";
-    oss << std::setw(6) << std::setfill('0') << inode_id;
-    return oss.str();
-}
 
-std::string decode_inode_data(size_t inode_id) {
-    std::ostringstream oss;
-    oss << "inode_data:";
-    oss << std::setw(6) << std::setfill('0') << inode_id;
-    return oss.str();
-}
 
-InodeHandle::InodeHandle(LevelDBAdaptor* adaptor) {
+RnodeHandle::RnodeHandle(LevelDBAdaptor* adaptor) {
     this->adaptor = adaptor;
     cache.clear();
 }
 
-InodeHandle::~InodeHandle() {
+RnodeHandle::~RnodeHandle() {
     cache.clear();
     this->adaptor = nullptr;
 }
 
 
+bool RnodeHandle::get_rnode(rnode_key &key, std::string &rval) {
 
-bool InodeHandle::get_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
 
     io_s.metadata_read += 1;
-    std::string metadata_key = decode_inode_metadata(inode_id);
-    std::string metadata_value;
-
-    auto ret = cache.find(metadata_key);
+    auto ret = cache.find(key.ToString());
 
     // cache hit 
     if(ret != cache.end()) {
-        metadata_value = ret->second;
+        rval = ret->second;
         io_s.metadata_cache_hit += 1;
     } else {
 
-        if (!adaptor->GetValue(metadata_key, metadata_value)) {
-            delete inode_metadata;
-            inode_metadata = nullptr;
-            
+        if (!adaptor->GetValue(key.ToString(), rval)) {
+   
             if(ENABELD_LOG) {
-                spdlog::error("get inode metadata inode_id - {}: inode metadata doesn't exist", inode_id);
+                spdlog::error("get rnode metadata rnode_id - {}: rnode metadata doesn't exist", key.ToString());
             }
-            exit(1);
+            return false;
         }
 
         io_s.metadata_cache_miss += 1;
 
         // 加入缓存
-        cache.insert(std::unordered_map<std::string, std::string>::value_type(metadata_key, metadata_value));
-    }
-
-    // fixme: 这里使得inode_metadata的地址发生了变化，导致在调用初没办法delete掉 (solved)
-    const inode_metadata_t* metadata = reinterpret_cast<const inode_metadata_t *>(metadata_value.data());
-    std::memcpy(inode_metadata, metadata, sizeof(inode_metadata_t));
-    if (ENABELD_LOG) {
-        spdlog::info("get inode metadata: {}", inode_metadata->debug());
+        cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), rval));
     }
     return true;
 }
 
-// bug: 好像put进去的inode是乱码的 (solved, 使用&inode_metadata，而不是inode_metadata)
-// bug: 这里可能存在缓存失效的问题 (solved, 在重写之前将缓存删除即可)
-bool InodeHandle::put_inode_metadata(size_t inode_id, inode_metadata_t* &inode_metadata) {
+bool RnodeHandle::put_rnode(rnode_key &key, std::string rval) {
     
     io_s.metadata_write += 1;
 
-    if (inode_metadata == nullptr) {
+    if (!adaptor->Insert(key.ToString(), rval)) {
         if(ENABELD_LOG) {
-            spdlog::error("put inode metadata: inode metadata doesn't exist");
+            spdlog::error("put rnode metadata rnode_id - {}: kv store interanl error", key.ToString());
         }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        spdlog::info("put inode metadata: {}", inode_metadata->debug());
-    }
-    std::string metadata_key = decode_inode_metadata(inode_id);
-
-    // fixme: 使用这行命令是没办法将stat放进去的，会有乱码，原因是应该是inode_metadata，而不是&inode_metadata 
-    std::string metadata_value = std::string(reinterpret_cast<const char*>(inode_metadata), sizeof(inode_metadata_t));
- 
-    if (!adaptor->Insert(metadata_key, metadata_value)) {
-        delete inode_metadata;
-        if(ENABELD_LOG) {
-            spdlog::error("put inode metadata inode_id - {}: kv store interanl error", inode_id);
-        }
-        exit(1);
+        return false;
     }
 
-    auto ret = cache.find(metadata_key);
+    auto ret = cache.find(key.ToString());
+
+    // cache hit 
     if(ret != cache.end()) {
-        cache.erase(metadata_key);
+        cache.erase(key.ToString());
     }
-    cache.insert(std::unordered_map<std::string, std::string>::value_type(metadata_key, metadata_value));
+
+    // 加入缓存
+    cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), rval));
 
     return true;
+
 }
 
-bool InodeHandle::delete_inode_metadata(size_t inode_id) {
+bool RnodeHandle::delete_rnode(rnode_key &key) {
+
     io_s.metadata_delete += 1;
-    if (ENABELD_LOG) {
-        spdlog::info("delete inode metadata: {}", inode_id);
-    }
 
-    std::string metadata_key = decode_inode_metadata(inode_id);
-
-    auto ret = cache.find(metadata_key);
+    auto ret = cache.find(key.ToString());
     if(ret != cache.end()) {
-        cache.erase(metadata_key);
+        cache.erase(key.ToString());
     }
 
-    if(!adaptor->Remove(metadata_key)) {
-        spdlog::error("delete inode metadata inode_id - {}: kv store interanl error", inode_id);
-        exit(1);
-    }
-    return true;
-}
-
-bool InodeHandle::get_inode_data(size_t inode_id, inode_data_t* &inode_data) {
-    std::string data_key = decode_inode_data(inode_id);
-    std::string data_value;
-    if (!adaptor->GetValue(data_key, data_value)) {
-        inode_data = nullptr;
-        spdlog::error("get inode data inode_id - {}: inode data doesn't exist", inode_id);
-        exit(1);
-    }
-    inode_data = new inode_data_t;
-    try {
-        nlohmann::json json_map = nlohmann::json::parse(data_value);
-        inode_data->map = json_map.get<std::unordered_map<std::string, std::string>>();
-    } catch (const std::exception& e) {
-        inode_data = nullptr;
-        if(ENABELD_LOG) {
-            spdlog::error("get inode data inode_id -{}: unresolved data format", inode_id);
-        }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        if(ENABELD_LOG) {
-            spdlog::info("get inode metadata: {}", inode_data->debug());
-        }
-    }
-    return true;
-}
-
-bool InodeHandle::put_inode_data(size_t inode_id, inode_data_t* &inode_data) {
-    if (inode_data == nullptr) {
-        {
-            spdlog::error("put inode data: inode data doesn't exist");
-        }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        {
-            spdlog::info("put inode data: {}", inode_data->debug());
-        }
-    }
-    std::string data_key = decode_inode_data(inode_id);
-    nlohmann::json json_map = inode_data->map;
-    std::string data_value = json_map.dump();
-    if (!adaptor->Insert(data_key, data_value)) {
-        delete inode_data;
-        spdlog::error("put inode data inode_id - {}: kv store interanl error", inode_id);
-        exit(1);
-    }
-    delete inode_data;
-    return true;
-}
-
-bool InodeHandle::get_inode(size_t inode_id, inode_t* &inode) {
-    inode_metadata_t* metadata;
-    inode_data_t* data;
-    if (!get_inode_metadata(inode_id, metadata)) {
-        inode = nullptr;
+    if(!adaptor->Remove(key.ToString())) {
+        spdlog::error("delete rnode metadata rnode_id - {}: kv store interanl error", key.ToString());
         return false;
     }
-    if (!get_inode_data(inode_id, data)) {
-        delete metadata;
-        inode = nullptr;
-        return false;
-    }
-    inode = new inode_t;
-    std::memcpy(&inode->metadata, metadata, sizeof(inode_metadata_t));
-    inode->data->map = data->map;
-    delete metadata;
-    delete data;
-    if (ENABELD_LOG) {
-        spdlog::info("get inode: {}", inode->debug());
-    }
     return true;
-}
-
-bool InodeHandle::put_inode(size_t inode_id, inode_t* inode) {
-    if (inode == nullptr) {
-        if(ENABELD_LOG) {
-            spdlog::error("put inode: inode doesn't exist");
-        }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        spdlog::info("put inode: {}", inode->debug());
-    }
-    if (!put_inode_metadata(inode_id, inode->metadata)) {
-        delete inode;
-        return false;
-    }
-    if (!put_inode_data(inode_id, inode->data)) {
-        delete inode;
-        return false;
-    }
-    delete inode;
-    return true;
+ 
 }
 
 

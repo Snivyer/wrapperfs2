@@ -18,18 +18,21 @@ int main(int argc, char *argv[]) {
 
 
     // 创建 ROOT_WRAPPER_ID inode
-    wrapperfs::location_t* location = new wrapperfs::location_t;
-    location->tag = wrapperfs::directory_relation;
-    location->wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
-    lstat("./tmp", &(location->stat));
-    location->stat.st_ino = wrapperfs::ROOT_WRAPPER_ID;
+    wrapperfs::location_key key;
+    key.flag = 'w';
+    key.tag = wrapperfs::directory_relation;
+    key.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
 
 
-    if (!handle->put_location(location)) {
+    wrapperfs::location_header* lheader = new wrapperfs::location_header;
+    lstat("./tmp", &(lheader->fstat));
+    lheader->fstat.st_ino = wrapperfs::ROOT_WRAPPER_ID;
+    std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(wrapperfs::location_header));
+
+    if (!handle->put_location(key, lval)) {
         if (wrapperfs::ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create root wrapper!");
         }
-        delete location;
         return false;
     }
 

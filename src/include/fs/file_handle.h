@@ -11,4 +11,15 @@ struct file_handle_t {
     struct stat stat;
 };
 
+
+struct wrapper_handle_t {
+    wrapper_tag tag;
+    size_t wrapper_id;
+    struct stat stat;
+};
+
+
+
+
+
 }

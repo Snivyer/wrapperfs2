@@ -42,7 +42,7 @@ private:
     size_t max_wrapper_id;
     std::string data_dir_;
     LevelDBAdaptor* adaptor_;
-    InodeHandle* inode_handle;
+    RnodeHandle* rnode_handle;
     WrapperHandle* wrapper_handle;
 
 
@@ -56,7 +56,9 @@ private:
     bool GetWrapperStat(size_t wrapper_id, struct stat *stat);
     void InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev);
     bool UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id);
+    bool UpdateMetadata(mode_t mode, dev_t dev, size_t ino);
     bool UpdateMetadata(struct stat &stat, size_t ino);
+
 
 
 

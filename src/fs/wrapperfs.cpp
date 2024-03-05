@@ -2,6 +2,32 @@
 
 namespace wrapperfs {
 
+
+inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
+    key.flag = 'r';
+    key.rnode_id = ino;
+}
+
+inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
+    key.flag = 'w';
+    key.tag = tag;
+    key.wrapper_id = wrapper_id;
+}
+
+inline static void BuildRelationKey(size_t wrapper_id, wrapper_tag tag, 
+                                    std::string &dist, relation_key &key) {
+    key.flag = 'w';
+    key.tag = tag;
+    key.wrapper_id = wrapper_id;
+    key.distance = dist;
+}
+
+
+const struct stat* GetMetadata(std::string &value) {
+    return reinterpret_cast<const struct stat*> (value.data());
+}
+
+
 // wrapperfs的初始化过程
 // 初始化的关键参数有：max_ino, max_wrapper_id
 wrapperfs::wrapperfs(const std::string &data_dir, const std::string &db_dir) {
@@ -9,25 +35,23 @@ wrapperfs::wrapperfs(const std::string &data_dir, const std::string &db_dir) {
     max_wrapper_id = ROOT_WRAPPER_ID;
     data_dir_ = data_dir;
     adaptor_ = new LevelDBAdaptor(db_dir);
-    inode_handle = new InodeHandle(adaptor_);
+    rnode_handle = new RnodeHandle(adaptor_);
     wrapper_handle = new WrapperHandle(adaptor_);
 }
+
 
 bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wrapper_id_in_search) {
 
     int index = -1;
     while (index != path_items.size() - 2) {
-        
-        relation_t* relation = new relation_t;
-        relation->tag = directory_relation;
-        relation->wrapper_id = wrapper_id_in_search;
-        relation->distance = path_items[index + 1];
 
-        if (!wrapper_handle->get_relation(relation)) {
+        relation_key key;
+        BuildRelationKey(wrapper_id_in_search, directory_relation, path_items[index + 1], key);
+        
+        if (!wrapper_handle->get_relation(key, wrapper_id_in_search)) {
             break;
         } else {
                 index += 1;
-                wrapper_id_in_search  = relation->next_wrapper_id;
         }
     }
 
@@ -42,14 +66,12 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
  bool wrapperfs::WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance) {
 
      // 首先判断是否能够找到目录
-    relation_t* relation = new relation_t;
-    relation->tag = directory_relation;
-    relation->wrapper_id = wrapper_id;
-    relation->distance = distance;
 
+    relation_key key;
+    BuildRelationKey(wrapper_id, directory_relation, distance, key);
+ 
     // 如果能够找到关系，那么就是目录
-    if (wrapper_handle->get_relation(relation) ) {
-        next_wrapper_id = relation->next_wrapper_id;
+    if (wrapper_handle->get_relation(key, next_wrapper_id) ) {
         return true;
     }
     return false;
@@ -77,7 +99,7 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
 bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename) {
 
     size_t pc_id;
-    PathLookup(path,wrapper_id, is_file, filename, pc_id);
+    return PathLookup(path,wrapper_id, is_file, filename, pc_id);
 }
 
 // bug: 无法区分目录或文件是新目录，还是旧目录 (solved: 新目录或新文件将返回false)
@@ -134,63 +156,104 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 
 // bug: 在get_entries过程中出现了段错误，原因出自于delete metadata，在这个过程中metadata的地址发生了几次变化，导致delete不掉了 (solved)
 // bug: 在get_entries过程中出现了段错误 (solved 查找成功可以delete，查找失败则不能)
-// FIXME: 这里的逻辑可以省略，直接拿metadata就行
+// FIXME: 这里的逻辑可以省略，直接拿metadata就行 （是的，已经修改了）
 bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
 
     
-    inode_metadata_t* metadata = new inode_metadata_t;
+    rnode_key key;
+    BuildRnodeKey(ino, key);
 
-        if (!inode_handle->get_inode_metadata(ino, metadata)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("getStat error, single file");
-            }
-                return false;
-        } else {
-            std::memcpy(stat, &metadata->stat, sizeof(struct stat));
-            return true;
+    std::string value;
+    if (!rnode_handle->get_rnode(key, value)) 
+    {
+        if (ENABELD_LOG) {
+            spdlog::warn("cannot get file stat");
         }
+            return false;
+    } else {
+        *stat = *(GetMetadata(value));
+        return true;
+    }
 }
 
 bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
-    
-    location_t* location = new location_t;
-    location->tag = directory_relation;
-    location->wrapper_id = wrapper_id;
-    if (!wrapper_handle->get_location(location)) {
+
+    location_key key;
+    std::string lval;
+    BuildLocationKey(wrapper_id, directory_relation, key);
+
+
+
+    if (!wrapper_handle->get_location(key, lval)) {
         if (ENABELD_LOG) {
             spdlog::warn("getattr: return failed");
         }
         return false;
     } else {
-        std::memcpy(stat, &location->stat, sizeof(struct stat));
+        *stat = *(GetMetadata(lval));
         return true;
     }  
 }
 
 
-bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
+// bug: 一进入这个函数就会报错，初步还以是rnode_value &rval的问题
+bool wrapperfs::UpdateMetadata(mode_t mode, dev_t dev, size_t ino) {
+
     
-    inode_metadata_t *metadata = new inode_metadata_t;
-    std::memcpy(&(metadata->stat), &stat, sizeof(struct stat));
-        
-    if (!inode_handle->put_inode_metadata(ino, metadata)) {
+    rnode_key key;
+    BuildRnodeKey(ino, key);
+
+    
+    rnode_header* header = new rnode_header;
+    InitStat(header->fstat, ino, mode, dev);
+    std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
+  
+  
+
+    if (!rnode_handle->put_rnode(key, header_value)) {
         if (ENABELD_LOG) {
-            spdlog::warn("mknod error: put file stat error");
+            spdlog::warn("update metadata error.");
         }
-        return -ENONET;
+        return false;
     }
+
+    return true;
+
+}
+
+
+bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
+
+    rnode_key key;
+    BuildRnodeKey(ino, key);
+
+    rnode_header* header = new rnode_header;
+    std::memcpy(&(header->fstat), &stat, sizeof(struct stat));
+    std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
+  
+
+    if (!rnode_handle->put_rnode(key, header_value)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("update metadata error.");
+        }
+        return false;
+    }
+
+    return true;
+
 
 }
 
 bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
 
-    // 首先创建location，将wrapper写进去
-    location_t* locate = new location_t;
-    locate->wrapper_id = wrapper_id;
-    locate->tag = directory_relation;
-    std::memcpy(&(locate->stat), &stat, sizeof(struct stat));
+    location_key key;
+    BuildLocationKey(wrapper_id, directory_relation, key);
 
-    if(!wrapper_handle->put_location(locate)) {
+    location_header* lheader = new location_header;
+    std::memcpy(&(lheader->fstat), &stat, sizeof(struct stat));
+    std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(location_header));
+
+    if(!wrapper_handle->put_location(key, lval)) {
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create directory wrapper.");
         }
@@ -240,6 +303,7 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
     return 0;
 }
 
+
 // bug: 自己构建的stat，总是不合法，总是报错，我试试下面的方法，Input/output error （solved）
 // 方法一：直接使用根目录的stat，结果：可行
 // 方法二：采用lstat来填充stat，然后将其余的信息补充，结果：不行
@@ -275,8 +339,11 @@ void wrapperfs::InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev) 
     stat.st_ctim.tv_nsec = 0;
 }
 
+
+
 // bug: 文件创建以后，居然显示not file，这里面肯定有逻辑错误 （solved）
 // bug: 获取不到父目录的entries (sovled: 因为传错了一个wrapper id)
+// bug: 经过测试，代码的问题就是在这些指针的转换过程中，不转换就不会错
 int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
 
     std::string path_string = path;
@@ -294,12 +361,9 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     max_ino = max_ino + 1;
     size_t ino = max_ino;
 
-    struct stat stat;
-
     // FIXME: mode需要加入S_IFREG，以标注是文件
-    InitStat(stat, ino, mode | S_IFREG, dev);
-
-    UpdateMetadata(stat, ino);
+    UpdateMetadata(mode | S_IFREG, dev, ino);
+        
 
     // 还需要将文件名作为额外元数据写进去
     entries_t* entries = new entries_t;
@@ -326,7 +390,7 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     return 0;
 }
 
-// FIXME: 这里在创建目录stat的时候，采用的是wrapper_id作为inode id传进去的，不知道有没有问题
+// FIXME: 这里在创建目录stat的时候，采用的是wrapper_id作为inode id传进去的，不知道有没有问题 （没问题）
 int wrapperfs::Mkdir(const char* path, mode_t mode) {
 
     size_t wrapper_id = ROOT_WRAPPER_ID;
@@ -346,12 +410,14 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     InitStat(stat, create_wrapper_id, mode | S_IFDIR, 0);
 
     // 首先创建location，将wrapper写进去
-    location_t* locate = new location_t;
-    locate->wrapper_id = create_wrapper_id;
-    locate->tag = directory_relation;
-    std::memcpy(&(locate->stat), &stat, sizeof(struct stat));
+    location_key lkey;
+    BuildLocationKey(create_wrapper_id, directory_relation, lkey);
 
-    if(!wrapper_handle->put_location(locate)) {
+    location_header* lheader = new location_header;
+    std::memcpy(&(lheader->fstat), &stat, sizeof(struct stat));
+    std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(location_header));
+
+    if(!wrapper_handle->put_location(lkey, lval)) {
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create directory wrapper.");
         }
@@ -359,13 +425,9 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     }
 
     // 还需要将目录关系写进去
-    relation_t* relation = new relation_t;
-    relation->tag = directory_relation;
-    relation->wrapper_id = wrapper_id;
-    relation->distance = filename;
-    relation->next_wrapper_id = create_wrapper_id;
-
-    if(!wrapper_handle->put_relation(relation))  {
+    relation_key key;
+    BuildRelationKey(wrapper_id, directory_relation, filename, key);
+    if(!wrapper_handle->put_relation(key, create_wrapper_id))  {
              
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create the relation of dirctory wrapper.");
@@ -528,8 +590,10 @@ int wrapperfs::Unlink(const char *path) {
         while (it != entries->list.end()) {
             if (filename == (*it).second) {
                 ino = (*it).first;
+                rnode_key key;
+                BuildRnodeKey(ino, key);
                 // 删除元数据
-                if(!inode_handle->delete_inode_metadata((*it).first)) {
+                if(!rnode_handle->delete_rnode(key)) {
                     if (ENABELD_LOG) {
                         spdlog::warn("delete file error");
                     }
@@ -558,10 +622,7 @@ int wrapperfs::Unlink(const char *path) {
         // 删除真实的文件
         std::string real_path = path;
         GetFilePath(ino, real_path);
-        unlink(real_path.c_str());
-
-
-        return 0;
+        return unlink(real_path.c_str());
     } else {
 
         if (ENABELD_LOG) {
@@ -604,10 +665,10 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     std::string filename;
     op_s.opendir += 1;
 
-    location_t *locate = new location_t();
-    locate->tag = directory_relation;
- 
-    if(!PathLookup(path, locate->wrapper_id, is_file, filename)) {
+    wrapper_handle_t* wh = new wrapper_handle_t;
+    wh->tag = directory_relation;
+
+    if(!PathLookup(path,  wh->wrapper_id, is_file, filename)) {
 
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot resolved the path!");
@@ -615,7 +676,7 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
         return -ENOENT;
     }
 
-    if(!GetWrapperStat(locate->wrapper_id, &(locate->stat))) {
+    if(!GetWrapperStat(wh->wrapper_id, &(wh->stat))) {
     
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
@@ -623,14 +684,15 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
         return -ENOENT;
     }
 
-    file_info->fh = (uint64_t)locate;
+    file_info->fh = (uint64_t)wh;
     return 0;
 }
 
 // 
  int wrapperfs::Readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* file_info) {
 
-    location_t* locate = (location_t *) file_info->fh;
+    wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
+    
     op_s.readdir += 1;
 
     if (filler(buf, ".", NULL, 0) < 0) {
@@ -650,7 +712,7 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     // 获取文件
     entries_t* entries = new entries_t;
     entries->tag = directory_relation;
-    entries->wrapper_id = locate->wrapper_id;
+    entries->wrapper_id = wh->wrapper_id;
     if (!wrapper_handle->get_entries(entries)) {
             if (ENABELD_LOG) {
                 spdlog::warn("readdir error, cannot find sub file entry!");
@@ -670,16 +732,19 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     }
 
     // 获取目录
-    std::vector<relation_t> relations;
- 
-    if (!wrapper_handle->get_range_relations(directory_relation, locate->wrapper_id, relations)) {
+    relation_key rkey;
+    std::string nullstr = std::string("");
+    BuildRelationKey(wh->wrapper_id, directory_relation, nullstr, rkey);
+    ATTR_LIST wid2attr;
+
+    if (!wrapper_handle->get_range_relations(rkey, wid2attr)) {
         if (ENABELD_LOG) {
                 spdlog::warn("readdir error, cannot find sub directory!");
             }
             return 0;
     } else {
-        for (auto &relation : relations) {
-            if (filler(buf, relation.distance.c_str(), NULL, 0) < 0) {
+        for (auto &item : wid2attr) {
+            if (filler(buf, item.first.c_str(), NULL, 0) < 0) {
                 if (ENABELD_LOG) {
                     spdlog::warn("readdir error, cannot filler directory name.");
                 }
@@ -728,13 +793,11 @@ int wrapperfs::RemoveDir(const char *path) {
     }
 
     // 删除relation
-    relation_t* relation = new relation_t;
-    relation->tag = directory_relation;
-    relation->wrapper_id = wrapper_id_in_search;
-    relation->distance = filename;
-    relation->next_wrapper_id = wrapper_id;
+    relation_key rkey;
+    BuildRelationKey(wrapper_id_in_search, directory_relation, filename, rkey);
 
-    if(!wrapper_handle->delete_relation(relation))  {
+
+    if(!wrapper_handle->delete_relation(rkey))  {
              
         if (ENABELD_LOG) {
             spdlog::warn("rmdir error: cannot delete relation!");
@@ -743,11 +806,10 @@ int wrapperfs::RemoveDir(const char *path) {
     }
 
     // 删除location
-    location_t* locate = new location_t;
-    locate->wrapper_id = wrapper_id;
-    locate->tag = directory_relation;
+    location_key lkey;
+    BuildLocationKey(wrapper_id, directory_relation, lkey);
 
-    if(!wrapper_handle->delete_location(locate)) {
+    if(!wrapper_handle->delete_location(lkey)) {
         if (ENABELD_LOG) {
             spdlog::warn("rmdir error: cannot delete location!");
         }
@@ -757,7 +819,7 @@ int wrapperfs::RemoveDir(const char *path) {
     // 删除entries
     entries_t* entries = new entries_t;
     entries->tag = directory_relation;
-    entries->wrapper_id = locate->wrapper_id;
+    entries->wrapper_id = wrapper_id;
 
     if (!wrapper_handle->delete_entries(entries)) {
             if (ENABELD_LOG) {
@@ -771,11 +833,12 @@ int wrapperfs::RemoveDir(const char *path) {
 //
 int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
-    location_t *locate = reinterpret_cast<location_t*> (file_info->fh);
+    wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
+
     op_s.releasedir += 1;
 
     // 释放句柄
-    if (locate != NULL) {
+    if (wh != NULL) {
         file_info->fh = -1;
         return 0;
     } else {
@@ -1008,13 +1071,10 @@ int wrapperfs::Rename(const char* source, const char* dest) {
     } else {
 
         // step1: 删除source的relation
-        relation_t* source_relation = new relation_t;
-        source_relation->tag = directory_relation;
-        source_relation->wrapper_id = source_pc_id;
-        source_relation->distance = source_filename;
-        source_relation->next_wrapper_id = source_wrapper_id;
+        relation_key key;
+        BuildRelationKey(source_pc_id, directory_relation, source_filename, key);
 
-        if(!wrapper_handle->delete_relation(source_relation))  {
+        if(!wrapper_handle->delete_relation(key))  {
              
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: cannot delete source relation!");
@@ -1023,13 +1083,8 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         }
 
         // step2: 添加dest的relation
-        relation_t* dest_relation = new relation_t;
-        dest_relation->tag = directory_relation;
-        dest_relation->wrapper_id = dest_pc_id;
-        dest_relation->distance = dest_filename;
-        dest_relation->next_wrapper_id = source_wrapper_id;
-
-        if(!wrapper_handle->put_relation(dest_relation))  {
+        BuildRelationKey(dest_pc_id, directory_relation, dest_filename, key);
+        if(!wrapper_handle->put_relation(key, source_wrapper_id))  {
              
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: cannot put dest relation!");
