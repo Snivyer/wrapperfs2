@@ -2,19 +2,6 @@
 
 namespace wrapperfs {
 
-std::string decode_entries(entries_t* entries) {
-    std::ostringstream oss;
-    oss << "entries:";
-    switch (entries->tag) {
-        case directory_relation:
-            oss << "d:";
-            break;
-    }
-    oss << std::setw(6) << std::setfill('0') << entries->wrapper_id;
-    return oss.str();
-}
-
-
 
 WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
     this->adaptor = adaptor;
@@ -23,132 +10,71 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 WrapperHandle::~WrapperHandle() {
     this->adaptor = nullptr;
    
-    for(auto item:entries_cache) {
-        
-        if(item.second != nullptr) {
-            delete item.second;
-        }
-    }
     entries_cache.clear();
     location_cache.clear();
     relation_cache.clear();
 }
 
-
-// bug: 这里的entries重新申请了， 会不会delete错，需要自己delete (solved)
-// bug: 不需要delete了，因为已经缓存了
-bool WrapperHandle::get_entries(entries_t* &entries) {
-    std::string key = decode_entries(entries);
-    std::string value;
+bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
+  
 
     io_s.entry_read += 1;
 
-    auto ret = entries_cache.find(key);
-    if (ret != entries_cache.end()) {
-
-        // 先删除外面构造的
-        if (entries!= nullptr) {
-            delete entries;
-        }
+    auto ret = entries_cache1.find(key.ToString());
+    if (ret != entries_cache1.end()) {
         io_s.entry_cache_hit += 1;
-        entries = ret->second;
+        eval = ret->second;
         return true;
     }
 
-    io_s.entry_cache_miss += 1;
-    if (!adaptor->GetValue(key, value)) {
-        delete entries;
+    if (!adaptor->GetValue(key.ToString(), eval)) {
         if(ENABELD_LOG) {
-            spdlog::warn("get entries tag - {} wrapper_id - {}: entries doesn't exist", entries->tag, entries->wrapper_id);
+            spdlog::warn("get entries tag - {} wrapper_id - {}: entries doesn't exist", key.tag, key.wrapper_id);
         }
         return false;
     }
 
-    try {
-        nlohmann::json json = nlohmann::json::parse(value);
-        json.at("tag").get_to(entries->tag);
-        json.at("wrapper_id").get_to(entries->wrapper_id);
-        json.at("list").get_to(entries->list);
-        entries_cache.insert(std::unordered_map<std::string, entries_t*>::value_type(key, entries));
-    } catch (const std::exception& e) {
-        delete entries;
-        entries = nullptr;
-        if(ENABELD_LOG) {
-            spdlog::warn("get entries tag - {} wrapper_id - {}: unresolved data format", entries->tag, entries->wrapper_id);
-        }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        spdlog::info("get entries: {}", entries->debug());
-    }
+    io_s.entry_cache_miss += 1;
+    entries_cache1.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
     return true;
 }
 
 // 已delete
-bool WrapperHandle::put_entries(entries_t* entries) {
+bool WrapperHandle::put_entries(entry_key &key, std::string &eval) {
 
-    io_s.entry_write += 1;
-        
-    if (entries == nullptr) {
+   
+    if (!adaptor->Insert(key.ToString(), eval)) {
         if(ENABELD_LOG) {
-            spdlog::warn("put entries: entries doesn't exist");
+            spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", key.tag, key.wrapper_id);
         }
-        exit(1);
-    }
-    if (ENABELD_LOG) {
-        spdlog::info("put entries: {}", entries->debug());
-    }
-    std::string key = decode_entries(entries);
-    nlohmann::json json = nlohmann::json{{"tag", entries->tag},
-                                          {"wrapper_id", entries->wrapper_id},
-                                          {"list", entries->list}};
-    std::string value = json.dump();
-    if (!adaptor->Insert(key, value)) {
-        if(ENABELD_LOG) {
-            spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
-        }
-        delete entries;
-        entries = nullptr;
-        exit(1);
+        return false;
     }
 
     // 写入的时候，先把缓存里的旧的删除，然后加入新的
-    auto ret = entries_cache.find(key);
-    if (ret != entries_cache.end()) {
-        entries_cache.erase(key);
+    auto ret = entries_cache1.find(key.ToString());
+    if (ret != entries_cache1.end()) {
+        entries_cache1.erase(key.ToString());
     }
-    entries_cache.insert(std::unordered_map<std::string, entries_t*>::value_type(key, entries));
+    entries_cache1.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
     return true;
 }
 
 // 已delete
-bool WrapperHandle::delete_entries(entries_t* entries) {
+bool WrapperHandle::delete_entries(entry_key &key) {
 
     io_s.entry_delete += 1;
+    // 删除缓存
+    auto ret = entries_cache1.find(key.ToString());
+    if (ret != entries_cache1.end()) {
+        entries_cache1.erase(key.ToString());
+    }
 
-    if (entries == nullptr) {
+    if(!adaptor->Remove(key.ToString())) {
         if(ENABELD_LOG) {
-            spdlog::warn("delete entries: entries doesn't exist");
+            spdlog::warn("delete entries tag - {} wrapper_id - {}: kv store interanl error", key.tag, key.wrapper_id);
         }
-        exit(1);
+        return false;
     }
-    std::string key = decode_entries(entries);
-        // 删除缓存
-    auto ret = entries_cache.find(key);
-    if (ret != entries_cache.end()) {
-        entries_cache.erase(key);
-    }
-
-    if(!adaptor->Remove(key)) {
-        delete entries;
-        if(ENABELD_LOG) {
-            spdlog::warn("delete entries tag - {} wrapper_id - {}: kv store interanl error", entries->tag, entries->wrapper_id);
-        }
-        exit(1);
-    }
-
-    delete entries;
-    entries = nullptr;
     return true;
 }
 
@@ -240,7 +166,6 @@ bool WrapperHandle::delete_relation(relation_key &key) {
     }
 
     for (auto &id_pair : id_list) {
-
         // 可以分割出文件名
         std::vector<std::string> items = split_string(id_pair.first, ":");
         wid2attr.emplace_back(std::pair(items[items.size() - 1], std::stoi(id_pair.second)));

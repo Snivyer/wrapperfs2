@@ -19,7 +19,6 @@ int main(int argc, char *argv[]) {
 
     // 创建 ROOT_WRAPPER_ID inode
     wrapperfs::location_key key;
-    key.flag = 'w';
     key.tag = wrapperfs::directory_relation;
     key.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
 
@@ -36,16 +35,15 @@ int main(int argc, char *argv[]) {
         return false;
     }
 
-    wrapperfs::entries_t* entries = new wrapperfs::entries_t;
-    entries->wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
-    entries->tag = wrapperfs::directory_relation;
+    wrapperfs::relation_key rkey;
+    rkey.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
+    rkey.tag = wrapperfs::directory_relation; 
 
-    if(!handle->put_entries(entries)) {
+    wrapperfs::entry_value eval;
+    if(!handle->put_entries(rkey, eval.ToString())) {
         if (wrapperfs::ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create the root wrapper entries.");
         }
-
-        delete entries;
         return false;
     }
     

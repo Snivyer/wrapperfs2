@@ -4,23 +4,27 @@ namespace wrapperfs {
 
 
 inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
-    key.flag = 'r';
     key.rnode_id = ino;
 }
 
 inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
-    key.flag = 'w';
+
     key.tag = tag;
     key.wrapper_id = wrapper_id;
 }
 
 inline static void BuildRelationKey(size_t wrapper_id, wrapper_tag tag, 
                                     std::string &dist, relation_key &key) {
-    key.flag = 'w';
     key.tag = tag;
     key.wrapper_id = wrapper_id;
     key.distance = dist;
 }
+
+inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &key)  {
+    key.wrapper_id = wrapper_id;
+    key.tag = tag;
+}
+
 
 
 const struct stat* GetMetadata(std::string &value) {
@@ -79,17 +83,16 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
 
  bool wrapperfs::EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr) {
 
-    entries_t* entries = new entries_t; 
-    entries->tag = directory_relation;
-    entries->wrapper_id = wrapper_id;
+    entry_key key;
+    BuildEntryKey(wrapper_id, directory_relation);
+
+    std::string result;
 
     // 如果能够找到，那么就是文件
-     if (wrapper_handle->get_entries(entries)) {
-        for (auto &entry : entries->list) {
-            if (primary_attr == entry.second) {
-                ino = entry.first;
-                return true;
-            }
+     if (wrapper_handle->get_entries(key, result)) {
+        entry_value eval(result);
+        if(eval.find(primary_attr, ino))  {
+            return true;
         }
     } 
     return false;
@@ -366,21 +369,25 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
         
 
     // 还需要将文件名作为额外元数据写进去
-    entries_t* entries = new entries_t;
-    entries->wrapper_id = wrapper_id;
-    entries->tag = directory_relation;
-    
+    entry_key key;
+    BuildEntryKey(wrapper_id, directory_relation);
+
+    std::string result;
 
     // bug: 这里的缓存会失效！（solved）
-    if (!wrapper_handle->get_entries(entries)) {
+    if (!wrapper_handle->get_entries(key, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot get name metadata.");
         }
         return -ENONET;
     } 
+
+    entry_value eval(result);
+    eval.push(filename, ino);
+
+    result = eval.ToString();
         
-    entries->list.push_back(std::pair(ino, filename)); 
-    if(!wrapper_handle->put_entries(entries)) {
+    if(!wrapper_handle->put_entries(key, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot put name metadata into db.");
         }
@@ -436,11 +443,12 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     }
 
     // 最后将空entries写进去
-    entries_t* entries = new entries_t;
-    entries->wrapper_id = create_wrapper_id;
-    entries->tag = directory_relation;
+    entry_key key;
+    BuildEntryKey(create_wrapper_id, directory_relation);
 
-    if(!wrapper_handle->put_entries(entries)) {
+    entry_value eval;
+
+    if(!wrapper_handle->put_entries(key, eval.ToString())) {
         if (ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create empty entries.");
         }
@@ -576,43 +584,35 @@ int wrapperfs::Unlink(const char *path) {
         PathResolution(path_items, wrapper_id);
     }
 
-    entries_t* entries = new entries_t;
-    entries->tag = directory_relation;
-    entries->wrapper_id = wrapper_id;
+    entry_key key;
+    BuildEntryKey(wrapper_id, directory_relation);
 
-    if (!wrapper_handle->get_entries(entries)) {
+    std::string result;
+    if (!wrapper_handle->get_entries(key, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("unlink error, cannot get entries");
         }
         return -ENOENT;
     } else {
-        auto it = entries->list.begin();
-        while (it != entries->list.end()) {
-            if (filename == (*it).second) {
-                ino = (*it).first;
-                rnode_key key;
-                BuildRnodeKey(ino, key);
-                // 删除元数据
-                if(!rnode_handle->delete_rnode(key)) {
-                    if (ENABELD_LOG) {
-                        spdlog::warn("delete file error");
-                    }
-                    return -ENOENT;
+        entry_value eval(result);
+        if(eval.find(filename, ino)) {
+            rnode_key key;
+            BuildRnodeKey(ino, key);
+            // 删除元数据
+            if(!rnode_handle->delete_rnode(key)) {
+                if (ENABELD_LOG) {
+                    spdlog::warn("delete file error");
                 }
-
-                // 移除entry
-                entries->list.erase(it);
-                is_remove = true;
-                break;
-            } else {
-                it++;
+                return -ENOENT;
             }
-               
+            eval.remove(filename);
+            is_remove = true;
         }
     }
 
+    result = eval.ToString();
     if (is_remove) {
-        if (!wrapper_handle->put_entries(entries)) {
+        if (!wrapper_handle->put_entries(key, result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("delete file error, can not put deleted entries");
             }
@@ -624,12 +624,11 @@ int wrapperfs::Unlink(const char *path) {
         GetFilePath(ino, real_path);
         return unlink(real_path.c_str());
     } else {
-
         if (ENABELD_LOG) {
             spdlog::warn("delete file error, can not find the deleted file.");
         }
         return -ENOENT;
-    }
+    }  
 }
 
 //
@@ -710,17 +709,25 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     }
 
     // 获取文件
-    entries_t* entries = new entries_t;
-    entries->tag = directory_relation;
-    entries->wrapper_id = wh->wrapper_id;
-    if (!wrapper_handle->get_entries(entries)) {
+    entry_key key;
+    BuildEntryKey(wh->wrapper_id, directory_relation);
+
+    std::string result;
+
+
+    if (!wrapper_handle->get_entries(key, result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("readdir error, cannot find sub file entry!");
             }
             return -ENOENT;
     } else {
-        for (auto &entry : entries->list) {
-            if (filler(buf, entry.second.c_str(), NULL, 0) < 0) {
+
+        entry_value eval(result);
+        std::vector<std::string> list;
+        eval.ToList(list);
+        
+        for (auto item : list) {
+            if (filler(buf, item.c_str(), NULL, 0) < 0) {
                 if (ENABELD_LOG) {
                     spdlog::warn("readdir error, cannot filler filename");
                 }

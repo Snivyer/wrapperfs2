@@ -19,7 +19,7 @@ struct rnode_key {
 
     std::string ToString() {
     std::stringstream s;
-    s << flag << ":" << rnode_id;
+    s  << "r:" << rnode_id;
         return s.str();
     }
 };
