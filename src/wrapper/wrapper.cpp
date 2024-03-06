@@ -16,12 +16,10 @@ WrapperHandle::~WrapperHandle() {
 }
 
 bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
-  
 
     io_s.entry_read += 1;
-
-    auto ret = entries_cache1.find(key.ToString());
-    if (ret != entries_cache1.end()) {
+    auto ret = entries_cache.find(key.ToString());
+    if (ret != entries_cache.end()) {
         io_s.entry_cache_hit += 1;
         eval = ret->second;
         return true;
@@ -35,14 +33,13 @@ bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
     }
 
     io_s.entry_cache_miss += 1;
-    entries_cache1.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
+    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
     return true;
 }
 
 // 已delete
 bool WrapperHandle::put_entries(entry_key &key, std::string &eval) {
 
-   
     if (!adaptor->Insert(key.ToString(), eval)) {
         if(ENABELD_LOG) {
             spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", key.tag, key.wrapper_id);
@@ -51,11 +48,11 @@ bool WrapperHandle::put_entries(entry_key &key, std::string &eval) {
     }
 
     // 写入的时候，先把缓存里的旧的删除，然后加入新的
-    auto ret = entries_cache1.find(key.ToString());
-    if (ret != entries_cache1.end()) {
-        entries_cache1.erase(key.ToString());
+    auto ret = entries_cache.find(key.ToString());
+    if (ret != entries_cache.end()) {
+        entries_cache.erase(key.ToString());
     }
-    entries_cache1.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
+    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
     return true;
 }
 
@@ -64,9 +61,9 @@ bool WrapperHandle::delete_entries(entry_key &key) {
 
     io_s.entry_delete += 1;
     // 删除缓存
-    auto ret = entries_cache1.find(key.ToString());
-    if (ret != entries_cache1.end()) {
-        entries_cache1.erase(key.ToString());
+    auto ret = entries_cache.find(key.ToString());
+    if (ret != entries_cache.end()) {
+        entries_cache.erase(key.ToString());
     }
 
     if(!adaptor->Remove(key.ToString())) {
@@ -131,7 +128,6 @@ bool WrapperHandle::put_relation(relation_key &key, size_t &next_wrapper_id) {
 // 已delete
 bool WrapperHandle::delete_relation(relation_key &key) {
 
- 
     io_s.relation_delete += 1;
 
     auto ret = relation_cache.find(key.ToString());
@@ -235,8 +231,4 @@ bool WrapperHandle::delete_location(location_key &key) {
     }
     return true;
 }
-
-
-
-
 }

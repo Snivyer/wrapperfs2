@@ -40,7 +40,6 @@ struct entry_value {
     
     size_t size;
     char* entry;
-
     entry_value(): size(0), entry(NULL) {}
     entry_value(std::string &val) {
         size = val.size();
@@ -53,8 +52,6 @@ struct entry_value {
     }
 
     bool push(std::string str, size_t ino) {
-
-
         size_t new_size = size + str.size() + 1 + sizeof(size_t);
         char* new_entry = new char[new_size];
 
@@ -83,7 +80,7 @@ struct entry_value {
             }
         }
 
-        memcpy(&ino, entry_back + str.data() + 1, sizeof(size_t));
+        memcpy(&ino, entry_back + str.size() + 1, sizeof(size_t));
         return true;
     }
 
@@ -161,28 +158,6 @@ struct entry_value {
     }
 
 };
-
-
-
-// 点查询
-struct entries_t {
-    wrapper_tag tag;
-    size_t wrapper_id;
-    std::vector<std::pair<size_t, std::string>> list;
-
-    std::string debug() {
-        std::stringstream s;
-        s << "tag:" << tag;
-        s << "\t";
-        s << " wrapper_id:" << wrapper_id;
-        for (auto &entry: list) {
-            s << " ino - " << entry.first;
-            s << " attr - " << entry.second;
-        }
-        return s.str();
-    }
-};
-
 
 struct relation_key {
     wrapper_tag tag;

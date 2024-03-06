@@ -25,12 +25,9 @@ inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &
     key.tag = tag;
 }
 
-
-
 const struct stat* GetMetadata(std::string &value) {
     return reinterpret_cast<const struct stat*> (value.data());
 }
-
 
 // wrapperfs的初始化过程
 // 初始化的关键参数有：max_ino, max_wrapper_id
@@ -84,7 +81,7 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
  bool wrapperfs::EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr) {
 
     entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation);
+    BuildEntryKey(wrapper_id, directory_relation, key);
 
     std::string result;
 
@@ -370,7 +367,7 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
 
     // 还需要将文件名作为额外元数据写进去
     entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation);
+    BuildEntryKey(wrapper_id, directory_relation, key);
 
     std::string result;
 
@@ -432,9 +429,9 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     }
 
     // 还需要将目录关系写进去
-    relation_key key;
-    BuildRelationKey(wrapper_id, directory_relation, filename, key);
-    if(!wrapper_handle->put_relation(key, create_wrapper_id))  {
+    relation_key rkey;
+    BuildRelationKey(wrapper_id, directory_relation, filename, rkey);
+    if(!wrapper_handle->put_relation(rkey, create_wrapper_id))  {
              
         if (ENABELD_LOG) {
             spdlog::warn("mkdir error: cannot create the relation of dirctory wrapper.");
@@ -443,12 +440,13 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     }
 
     // 最后将空entries写进去
-    entry_key key;
-    BuildEntryKey(create_wrapper_id, directory_relation);
+    entry_key ekey;
+    BuildEntryKey(create_wrapper_id, directory_relation, ekey);
 
     entry_value eval;
+    std::string result = eval.ToString();
 
-    if(!wrapper_handle->put_entries(key, eval.ToString())) {
+    if(!wrapper_handle->put_entries(ekey, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create empty entries.");
         }
@@ -585,7 +583,7 @@ int wrapperfs::Unlink(const char *path) {
     }
 
     entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation);
+    BuildEntryKey(wrapper_id, directory_relation, key);
 
     std::string result;
     if (!wrapper_handle->get_entries(key, result)) {
@@ -593,25 +591,25 @@ int wrapperfs::Unlink(const char *path) {
             spdlog::warn("unlink error, cannot get entries");
         }
         return -ENOENT;
-    } else {
-        entry_value eval(result);
-        if(eval.find(filename, ino)) {
-            rnode_key key;
-            BuildRnodeKey(ino, key);
-            // 删除元数据
-            if(!rnode_handle->delete_rnode(key)) {
-                if (ENABELD_LOG) {
-                    spdlog::warn("delete file error");
-                }
-                return -ENOENT;
-            }
-            eval.remove(filename);
-            is_remove = true;
-        }
     }
 
-    result = eval.ToString();
+    entry_value eval(result);
+    if(eval.find(filename, ino)) {
+        rnode_key key;
+        BuildRnodeKey(ino, key);
+        // 删除元数据
+        if(!rnode_handle->delete_rnode(key)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("delete file error");
+            }
+            return -ENOENT;
+        }
+        eval.remove(filename);
+        is_remove = true;
+    }
+    
     if (is_remove) {
+        result = eval.ToString();
         if (!wrapper_handle->put_entries(key, result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("delete file error, can not put deleted entries");
@@ -710,10 +708,8 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
 
     // 获取文件
     entry_key key;
-    BuildEntryKey(wh->wrapper_id, directory_relation);
-
+    BuildEntryKey(wh->wrapper_id, directory_relation, key);
     std::string result;
-
 
     if (!wrapper_handle->get_entries(key, result)) {
             if (ENABELD_LOG) {
@@ -824,11 +820,9 @@ int wrapperfs::RemoveDir(const char *path) {
     }
 
     // 删除entries
-    entries_t* entries = new entries_t;
-    entries->tag = directory_relation;
-    entries->wrapper_id = wrapper_id;
-
-    if (!wrapper_handle->delete_entries(entries)) {
+    entry_key key;
+    BuildEntryKey(wrapper_id, directory_relation, key);
+    if (!wrapper_handle->delete_entries(key)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rmdir error: cannot delete entries!");
             }
@@ -1024,32 +1018,28 @@ int wrapperfs::Rename(const char* source, const char* dest) {
     if(is_file) {
 
         // step1: 删除source的entries
-        entries_t* source_entries = new entries_t;
-        source_entries->tag = directory_relation;
-        source_entries->wrapper_id = source_wrapper_id;
+        entry_key source_key;
+        BuildEntryKey(source_wrapper_id, directory_relation, source_key);
+        std::string result;
         
-        if (!wrapper_handle->get_entries(source_entries)) {
+
+        if (!wrapper_handle->get_entries(source_key, result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rename error, cannot get source file entries");
             }
             return -ENOENT;
-        } else {
-            auto it = source_entries->list.begin();
-            while (it != source_entries->list.end()) {
-                if (source_filename == (*it).second) {
-                    // 复制ino id
-                    source_ino = (*it).first;
-                    // 移除entry
-                    source_entries->list.erase(it);
-                    break;
-                } else {
-                    it++;
-                }
-            }
+        } 
+
+        entry_value eval(result);
+           
+        if(eval.find(source_filename, source_ino)) {
+            eval.remove(source_filename);
         }
 
+        result = eval.ToString();
+            
         // step2: 将修改后的source_entries存回去
-        if(!wrapper_handle->put_entries(source_entries)) {
+        if(!wrapper_handle->put_entries(source_key, result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: cannot put modified entries!");
             }
@@ -1057,19 +1047,22 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         }
 
         // step3: 添加dest的entries
-        entries_t* dest_entries = new entries_t;
-        dest_entries->wrapper_id = dest_wrapper_id;     // mv可以到不同的目录下
-        dest_entries->tag = directory_relation;
-        
-        if (!wrapper_handle->get_entries(dest_entries)) {
+        entry_key dest_key;
+        BuildEntryKey(dest_wrapper_id, directory_relation, dest_key);
+        std::string dest_result;
+ 
+        if (!wrapper_handle->get_entries(dest_key, dest_result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: dir isn't exist, cannot mv file into this dir!");
             }
             return -ENONET;
         } 
+
+        entry_value  dest_eval(dest_result);
+        dest_eval.push(dest_filename, source_ino);
+        dest_result = dest_eval.ToString();
         
-        dest_entries->list.push_back(std::pair(source_ino, dest_filename)); 
-        if(!wrapper_handle->put_entries(dest_entries)) {
+        if(!wrapper_handle->put_entries(dest_key, dest_result)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: cannot put dest entries.");
             }
