@@ -24,9 +24,7 @@ inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &
     key.tag = tag;
 }
 
-const struct stat* GetMetadata(std::string &value) {
-    return reinterpret_cast<const struct stat*> (value.data());
-}
+
 
 // wrapperfs的初始化过程
 // 初始化的关键参数有：max_ino, max_wrapper_id
@@ -158,20 +156,23 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 // FIXME: 这里的逻辑可以省略，直接拿metadata就行 （是的，已经修改了）
 bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
 
-    rnode_key key;
-    BuildRnodeKey(ino, key);
-
-    std::string value;
-    if (!rnode_handle->get_rnode(key, value)) 
-    {
-        if (ENABELD_LOG) {
-            spdlog::warn("cannot get file stat");
+    stat = rnode_handle->get_rnode(ino);
+    
+    if (stat == nullptr) {
+        rnode_key key;
+        BuildRnodeKey(ino, key);
+        std::string value;
+        if (!rnode_handle->get_rnode(key, value)) 
+        {    
+            if (ENABELD_LOG) {
+                spdlog::warn("cannot get file stat");
+            }
+            return false; 
+        } else {
+            *stat = *(GetMetadata(value));
         }
-            return false;
-    } else {
-        *stat = *(GetMetadata(value));
-        return true;
     }
+    return true;
 }
 
 bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
@@ -299,6 +300,7 @@ void wrapperfs::InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev) 
     stat.st_ino = ino;
     stat.st_mode = mode;
     stat.st_dev = dev;
+
 
     stat.st_gid = fuse_get_context()->gid;
     stat.st_uid = fuse_get_context()->uid;

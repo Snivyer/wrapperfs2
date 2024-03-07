@@ -8,6 +8,7 @@
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
+#include <future>
 
 #include "common/config.h"
 #include "adaptor/leveldb_adaptor.h"
@@ -202,29 +203,40 @@ struct location_header {
 };
 
 
-
+struct wrapper_entry {
+    struct stat* stat;
+    ATTR_LIST* entries;
+    ATTR_LIST* relations;
+}
 
 
 class WrapperHandle {
 
 private:
     LevelDBAdaptor* adaptor;
+
+
     std::unordered_map<std::string, std::string> entries_cache;
     std::unordered_map<std::string, size_t> relation_cache;
     std::unordered_map<std::string, std::string> location_cache;
-
+    std::unordered_map<size_t, wrapper_entry> wrapper_cache;
 
 public:
     WrapperHandle(LevelDBAdaptor* adaptor);
     ~WrapperHandle();
 
+    struct stat* get_wrapper_stat(size_t wrapper_id);
+    size_t get_relation(size_t wrapper_id, std::string filename);
+
+    size_t get_entry(size_t ino, std::string filename);
     bool get_entries(entry_key &key, std::string &eval);
-    bool put_entries(entry_key &key, std::string &eval);
     bool delete_entries(entry_key &key);
+    bool update_entries(entry_key &key);
 
 
     bool get_relation(relation_key &key, size_t &next_wrapper_id);
-    bool put_relation(relation_key &key, size_t &next_wrapper_id);
+    bool ::put_relation_cache(relation_key &key, size_t next_wrapper_id);
+
     bool delete_relation(relation_key &key);
     bool get_range_relations(relation_key &key, ATTR_LIST &wid2attr);
     
@@ -232,10 +244,13 @@ public:
 
     bool get_location(location_key &key, std::string &lval);
     bool put_location(location_key &key, std::string &lval);
-    bool delete_location(location_key &key);   
+    bool delete_location(location_key &key);  
 
 
-
+private:
+    bool put_entries(entry_key &key, std::string &eval);
+    bool put_relation();
+    bool clear_wrapper_cache(location_key &key);
 
 
 

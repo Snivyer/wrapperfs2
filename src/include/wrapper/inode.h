@@ -33,7 +33,8 @@ struct rnode_header {
 class RnodeHandle {
 private:
     LevelDBAdaptor* adaptor;
-    std::unordered_map<std::string, std::string> cache;
+
+    std::unordered_map<size_t, struct stat*> cache;
 
 public:
     RnodeHandle(LevelDBAdaptor* adaptor);
@@ -42,6 +43,10 @@ public:
     bool get_rnode(rnode_key &key, std::string &value);
     bool put_rnode(rnode_key &key, std::string value);
     bool delete_rnode(rnode_key &key);
+
+    struct stat* get_rnode(size_t ino);
+
+
 };
 
 }
