@@ -8,7 +8,6 @@ inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
 }
 
 inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
-
     key.tag = tag;
     key.wrapper_id = wrapper_id;
 }
@@ -45,7 +44,6 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
 
     int index = -1;
     while (index != path_items.size() - 2) {
-
         relation_key key;
         BuildRelationKey(wrapper_id_in_search, directory_relation, path_items[index + 1], key);
         
@@ -67,10 +65,8 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
  bool wrapperfs::WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance) {
 
      // 首先判断是否能够找到目录
-
     relation_key key;
     BuildRelationKey(wrapper_id, directory_relation, distance, key);
- 
     // 如果能够找到关系，那么就是目录
     if (wrapper_handle->get_relation(key, next_wrapper_id) ) {
         return true;
@@ -82,7 +78,6 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
 
     entry_key key;
     BuildEntryKey(wrapper_id, directory_relation, key);
-
     std::string result;
 
     // 如果能够找到，那么就是文件
@@ -159,7 +154,6 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 // FIXME: 这里的逻辑可以省略，直接拿metadata就行 （是的，已经修改了）
 bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
 
-    
     rnode_key key;
     BuildRnodeKey(ino, key);
 
@@ -182,8 +176,6 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
     std::string lval;
     BuildLocationKey(wrapper_id, directory_relation, key);
 
-
-
     if (!wrapper_handle->get_location(key, lval)) {
         if (ENABELD_LOG) {
             spdlog::warn("getattr: return failed");
@@ -202,23 +194,17 @@ bool wrapperfs::UpdateMetadata(mode_t mode, dev_t dev, size_t ino) {
     
     rnode_key key;
     BuildRnodeKey(ino, key);
-
-    
     rnode_header* header = new rnode_header;
     InitStat(header->fstat, ino, mode, dev);
     std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
   
-  
-
     if (!rnode_handle->put_rnode(key, header_value)) {
         if (ENABELD_LOG) {
             spdlog::warn("update metadata error.");
         }
         return false;
     }
-
     return true;
-
 }
 
 
@@ -231,24 +217,19 @@ bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
     std::memcpy(&(header->fstat), &stat, sizeof(struct stat));
     std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
   
-
     if (!rnode_handle->put_rnode(key, header_value)) {
         if (ENABELD_LOG) {
             spdlog::warn("update metadata error.");
         }
         return false;
     }
-
     return true;
-
-
 }
 
 bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
 
     location_key key;
     BuildLocationKey(wrapper_id, directory_relation, key);
-
     location_header* lheader = new location_header;
     std::memcpy(&(lheader->fstat), &stat, sizeof(struct stat));
     std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(location_header));
@@ -259,7 +240,6 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
         }
         return -ENONET;
     }
-
 }
 
 // bug: 现有的PathLookup，无法获取新目录或新文件的元数据 (solved)
@@ -272,7 +252,6 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
     size_t ino;
 
     op_s.getattr += 1;
-
     if(!PathLookup(path, wrapper_id, is_file, filename, ino)) {
 
         op_s.getNULLStat += 1;
@@ -381,9 +360,7 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
 
     entry_value eval(result);
     eval.push(filename, ino);
-
     result = eval.ToString();
-        
     if(!wrapper_handle->put_entries(key, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot put name metadata into db.");
@@ -400,7 +377,6 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     size_t wrapper_id = ROOT_WRAPPER_ID;
     std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
     std::string filename = path_items[path_items.size() - 1];
-
     op_s.mkdir += 1;
 
     if (path_items.size() > 1 ) {
@@ -445,7 +421,6 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
 
     entry_value eval;
     std::string result = eval.ToString();
-
     if(!wrapper_handle->put_entries(ekey, result)) {
         if (ENABELD_LOG) {
             spdlog::warn("mkfs error: cannot create empty entries.");
@@ -461,7 +436,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     std::string filename;
     size_t ino;
     file_handle_t* fh = new file_handle_t;
-
     op_s.open += 1;
 
     size_t wrapper_id = ROOT_WRAPPER_ID;
@@ -493,7 +467,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     GetFilePath(ino, real_path);
 
     fh->fd = open(real_path.c_str(), file_info->flags | O_CREAT, fh->stat.st_mode);
-
     if(fh->fd < 0) {
 
         if (ENABELD_LOG) {
@@ -501,7 +474,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
         }
         return -ENOENT;
     }
-
     file_info->fh = (uint64_t)fh;
     return 0;
 }
@@ -520,7 +492,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     if (fh->fd < 0) { 
         GetFilePath(fh->ino, path_string);
         fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat.st_mode);
-
     }
     int ret;
     if (fh->fd >= 0) {
@@ -531,7 +502,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
         }
         ret = -ENOENT;
     }
-
     return ret;
 }
 
@@ -555,7 +525,6 @@ int wrapperfs::Write(const char* path, const char* buf, size_t size, off_t offse
         }
         ret = -ENOENT;
     }
-
     // FIXME: 写完数据以后，记得及时更新文件大小
     if(ret > 0) {
         fh->stat.st_size = offset + size;
@@ -653,26 +622,37 @@ int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
         }
         return -ENOENT;
     }
-
 }
 
 int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
 
-    bool is_file;
-    std::string filename;
     op_s.opendir += 1;
-
     wrapper_handle_t* wh = new wrapper_handle_t;
     wh->tag = directory_relation;
 
-    if(!PathLookup(path,  wh->wrapper_id, is_file, filename)) {
 
-        if (ENABELD_LOG) {
-            spdlog::warn("open: cannot resolved the path!");
+    std::string path_string = path;
+    std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
+    size_t wrapper_id = ROOT_WRAPPER_ID;
+    std::string filename;
+
+
+    if (path_items.size() == 0) {
+        wh->wrapper_id = ROOT_WRAPPER_ID;
+    } else {
+        if (path_items.size() > 1) {
+            PathResolution(path_items, wrapper_id);
         }
-        return -ENOENT;
-    }
 
+        filename = path_items[path_items.size() - 1];
+        if (!WrapperLookup(wrapper_id, wh->wrapper_id, filename)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("opendir: cannot resolved the path!");
+            }
+            return -ENOENT;
+        } 
+    }
+    
     if(!GetWrapperStat(wh->wrapper_id, &(wh->stat))) {
     
         if (ENABELD_LOG) {
@@ -798,8 +778,6 @@ int wrapperfs::RemoveDir(const char *path) {
     // 删除relation
     relation_key rkey;
     BuildRelationKey(wrapper_id_in_search, directory_relation, filename, rkey);
-
-
     if(!wrapper_handle->delete_relation(rkey))  {
              
         if (ENABELD_LOG) {
@@ -811,7 +789,6 @@ int wrapperfs::RemoveDir(const char *path) {
     // 删除location
     location_key lkey;
     BuildLocationKey(wrapper_id, directory_relation, lkey);
-
     if(!wrapper_handle->delete_location(lkey)) {
         if (ENABELD_LOG) {
             spdlog::warn("rmdir error: cannot delete location!");
@@ -850,12 +827,9 @@ int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
     }
 }
 
-
-
 int wrapperfs::Access(const char* path, int mask) {
 
     op_s.access += 1;
-
     if (ENABELD_LOG) {
         spdlog::debug("access: %s %08x\n", path, mask);
     }
@@ -994,7 +968,6 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
 
 }
 
-
 int wrapperfs::Rename(const char* source, const char* dest) {
 
     // 还是需要分文件还是目录
@@ -1031,7 +1004,6 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         } 
 
         entry_value eval(result);
-           
         if(eval.find(source_filename, source_ino)) {
             eval.remove(source_filename);
         }
