@@ -9,3 +9,5 @@ wrapperfs2 is the new version of wrappers.
 2024-3-1 add location, entries, relation cache and metadata cache.
 
 2024-3-5 serializing and deserializing KV pair using Json cause degradated performance, so I improve the process of serializing and deserializing and commit it to the new branch: branck-1.
+
+2024-3-6 opendir should not execute the full process of PathLookup() and just need to call the WrapperLookup().
