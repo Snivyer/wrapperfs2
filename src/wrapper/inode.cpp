@@ -38,7 +38,8 @@ bool RnodeHandle::get_rnode(rnode_key &key, std::string &rval) {
         io_s.metadata_cache_miss += 1;
 
         // 加入缓存
-        cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), rval));
+        cache.insert({key.ToString(), rval});
+        io_s.metadata_cache_replace += 1;
     }
     return true;
 }
@@ -54,15 +55,9 @@ bool RnodeHandle::put_rnode(rnode_key &key, std::string rval) {
         return false;
     }
 
-    auto ret = cache.find(key.ToString());
-
-    // cache hit 
-    if(ret != cache.end()) {
-        cache.erase(key.ToString());
-    }
-
     // 加入缓存
-    cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), rval));
+    cache[key.ToString()] = rval;
+    io_s.metadata_cache_replace += 1;
 
     return true;
 
@@ -75,6 +70,7 @@ bool RnodeHandle::delete_rnode(rnode_key &key) {
     auto ret = cache.find(key.ToString());
     if(ret != cache.end()) {
         cache.erase(key.ToString());
+        io_s.metadata_cache_replace += 1;
     }
 
     if(!adaptor->Remove(key.ToString())) {

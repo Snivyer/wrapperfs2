@@ -12,10 +12,9 @@ int main(int argc, char *argv[]) {
         std::cout << "wrapperfs mkfs error." << std::endl;
         exit(1);
     }
+
     wrapperfs::LevelDBAdaptor* adaptor_ = new wrapperfs::LevelDBAdaptor(argv[1]);
-
     wrapperfs::WrapperHandle* handle = new wrapperfs::WrapperHandle(adaptor_);
-
 
     // 创建 ROOT_WRAPPER_ID inode
     wrapperfs::location_key key;
@@ -48,8 +47,6 @@ int main(int argc, char *argv[]) {
         return false;
     }
     
-    spdlog::debug("wrapperfs mkfs success!");
-
-
+    // spdlog::debug("wrapperfs mkfs success!");
     return 0;
 }

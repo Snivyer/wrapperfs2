@@ -11,3 +11,6 @@ wrapperfs2 is the new version of wrappers.
 2024-3-5 serializing and deserializing KV pair using Json cause degradated performance, so I improve the process of serializing and deserializing and commit it to the new branch: branck-1.
 
 2024-3-6 opendir should not execute the full process of PathLookup() and just need to call the WrapperLookup().
+
+
+2024-3-7 using Async mode to acclerate pathlookup, mkmod, mkdir, readdir, rmdir, but the performance hasn't imporve as think as.

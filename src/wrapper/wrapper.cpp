@@ -33,7 +33,8 @@ bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
     }
 
     io_s.entry_cache_miss += 1;
-    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
+    entries_cache.insert({key.ToString(), eval});
+    io_s.entry_cache_replace += 1;
     return true;
 }
 
@@ -48,11 +49,10 @@ bool WrapperHandle::put_entries(entry_key &key, std::string &eval) {
     }
 
     // 写入的时候，先把缓存里的旧的删除，然后加入新的
-    auto ret = entries_cache.find(key.ToString());
-    if (ret != entries_cache.end()) {
-        entries_cache.erase(key.ToString());
-    }
-    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
+    entries_cache[key.ToString()] = eval;
+    io_s.entry_cache_replace += 1;
+   
+
     return true;
 }
 
@@ -64,6 +64,7 @@ bool WrapperHandle::delete_entries(entry_key &key) {
     auto ret = entries_cache.find(key.ToString());
     if (ret != entries_cache.end()) {
         entries_cache.erase(key.ToString());
+        io_s.entry_cache_replace += 1;
     }
 
     if(!adaptor->Remove(key.ToString())) {
@@ -97,8 +98,9 @@ bool WrapperHandle::get_relation(relation_key &key, size_t &next_wrapper_id) {
         }
         return false;
     }
-
     next_wrapper_id = std::stoi(rval);
+    relation_cache.insert({key.ToString(), next_wrapper_id});
+    io_s.relation_cache_replace += 1;
     return true;
 }
 
@@ -117,11 +119,8 @@ bool WrapperHandle::put_relation(relation_key &key, size_t &next_wrapper_id) {
         return false;
     }
 
-    auto ret = relation_cache.find(key.ToString());
-    if (ret != relation_cache.end()) {
-        relation_cache.erase(key.ToString());
-    }
-    relation_cache.insert(std::unordered_map<std::string, size_t>::value_type(key.ToString(), next_wrapper_id));
+    relation_cache[key.ToString()] = next_wrapper_id;
+    io_s.relation_cache_replace += 1;
     return true;
 }
 
@@ -133,6 +132,7 @@ bool WrapperHandle::delete_relation(relation_key &key) {
     auto ret = relation_cache.find(key.ToString());
     if (ret != relation_cache.end()) {
         relation_cache.erase(key.ToString());
+        io_s.relation_cache_replace += 1;
     }
 
     if (!adaptor->Remove(key.ToString())) {
@@ -190,7 +190,8 @@ bool WrapperHandle::get_location(location_key &key, std::string &lval) {
     }
 
     io_s.location_cache_miss += 1;
-    location_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), lval));
+    location_cache.insert({key.ToString(), lval});
+    io_s.location_cache_replace += 1;
     return true;
 }
 
@@ -206,11 +207,8 @@ bool WrapperHandle::put_location(location_key &key, std::string &lval) {
         return false;
     }
     
-    auto ret = location_cache.find(key.ToString());
-    if (ret != location_cache.end()) {
-        location_cache.erase(key.ToString());   
-    }
-    location_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), lval));
+    location_cache[key.ToString()] = lval;
+    io_s.location_cache_replace += 1;
     return true;
 }
 
@@ -221,6 +219,7 @@ bool WrapperHandle::delete_location(location_key &key) {
     auto ret = location_cache.find(key.ToString());
     if (ret != location_cache.end()) {
         location_cache.erase(key.ToString());
+        io_s.location_cache_replace += 1;
     }
 
     if (!adaptor->Remove(key.ToString())) {

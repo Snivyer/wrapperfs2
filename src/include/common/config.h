@@ -98,6 +98,7 @@ struct IO_Statistic {
     size_t relation_read;
     size_t relation_cache_hit;
     size_t relation_cache_miss;
+    size_t relation_cache_replace;
     size_t relation_write;
     size_t relation_delete;
     size_t relation_range_read;
@@ -106,18 +107,21 @@ struct IO_Statistic {
     size_t location_read;
     size_t location_cache_hit;
     size_t location_cache_miss;
+    size_t location_cache_replace;
     size_t location_write;
     size_t location_delete;
 
     size_t metadata_read;
     size_t metadata_cache_hit;
     size_t metadata_cache_miss;
+    size_t metadata_cache_replace;
     size_t metadata_write;
     size_t metadata_delete;
 
     size_t entry_read;
     size_t entry_cache_hit;
     size_t entry_cache_miss;
+    size_t entry_cache_replace;
     size_t entry_write;
     size_t entry_delete;
 
@@ -125,25 +129,29 @@ struct IO_Statistic {
         relation_read = 0;
         relation_cache_hit = 0;
         relation_cache_miss = 0;
+        relation_cache_replace = 0;
         relation_write = 0;
         relation_delete = 0;
         relation_range_read = 0;
 
         location_read = 0;
         location_cache_hit = 0;
-        location_cache_miss = 0;        
+        location_cache_miss = 0;   
+        location_cache_replace = 0;     
         location_write = 0;
         location_delete = 0;
 
         metadata_read = 0;
         metadata_cache_hit = 0;
         metadata_cache_miss = 0;
+        metadata_cache_replace = 0;
         metadata_write = 0;
         metadata_delete = 0;
 
         entry_read = 0;
         entry_cache_hit = 0;
-        entry_cache_miss = 0;        
+        entry_cache_miss = 0; 
+        entry_cache_replace = 0;       
         entry_write = 0;
         entry_delete = 0;
     }
@@ -156,6 +164,8 @@ struct IO_Statistic {
         s << "relation_cache_hit:" << relation_cache_hit;
         s << "\t";  
         s << "relation_cache_miss:" << relation_cache_miss;
+        s << "\t";
+        s << "relation_cache_replace:" << relation_cache_replace;
         s << "\t";
         s << "relation_write:" << relation_write;
         s << "\t";
@@ -171,6 +181,8 @@ struct IO_Statistic {
         s << "\t";  
         s << "location_cache_miss:" << location_cache_miss;
         s << "\t";
+        s << "location_cache_replace:" << location_cache_replace;
+        s << "\t";
         s << "location_write:" << location_write;
         s << "\t";
         s << "location_delete:" << location_delete;
@@ -182,7 +194,9 @@ struct IO_Statistic {
         s << "metadata_cache_hit:" << metadata_cache_hit;
         s << "\t";  
         s << "metadata_cache_miss:" << metadata_cache_miss;
-        s << "\t";      
+        s << "\t";
+        s << "metadata_cache_replace:" << metadata_cache_replace;
+        s << "\t";         
         s << "metadata_write:" << metadata_write;
         s << "\t";  
         s << "metadata_delete:" << metadata_delete;
@@ -193,6 +207,8 @@ struct IO_Statistic {
         s << "entry_cache_hit:" << entry_cache_hit;
         s << "\t";
         s << "entry_cache_miss:" << entry_cache_miss;
+        s << "\t";
+        s << "entry_cache_replace:" << entry_cache_replace;
         s << "\t";
         s << "entry_write:" << entry_write;
         s << "\t";

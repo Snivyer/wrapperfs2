@@ -182,12 +182,12 @@ int main(int argc, char *argv[]) {
     std::cout << "meta_dir:" << argv[3] << std::endl;
     std::cout << "log_dir:" << argv[4] << std::endl;
 
-    if (wrapperfs::STATISTICS_LOG) {
-        spdlog::info("mount_dir: {}", argv[1]);
-        spdlog::info("data_dir: {}", argv[2]);
-        spdlog::info("meta_dir: {}", argv[3]);
-        spdlog::info("log_dir: {}", argv[4]);
-    }
+    // if (wrapperfs::STATISTICS_LOG) {
+    //     spdlog::info("mount_dir: {}", argv[1]);
+    //     spdlog::info("data_dir: {}", argv[2]);
+    //     spdlog::info("meta_dir: {}", argv[3]);
+    //     spdlog::info("log_dir: {}", argv[4]);
+    // }
 
     fs = new wrapperfs::wrapperfs(argv[2], argv[3]);
     int fuse_argc = 4;
