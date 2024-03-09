@@ -3,26 +3,7 @@
 namespace wrapperfs {
 
 
-inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
-    key.rnode_id = ino;
-}
 
-inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
-    key.tag = tag;
-    key.wrapper_id = wrapper_id;
-}
-
-inline static void BuildRelationKey(size_t wrapper_id, wrapper_tag tag, 
-                                    std::string &dist, relation_key &key) {
-    key.tag = tag;
-    key.wrapper_id = wrapper_id;
-    key.distance = dist;
-}
-
-inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &key)  {
-    key.wrapper_id = wrapper_id;
-    key.tag = tag;
-}
 
 
 
@@ -60,13 +41,13 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
     }
 }
 
- bool wrapperfs::WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance) {
+bool wrapperfs::WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance) {
 
      // 首先判断是否能够找到目录
     relation_key key;
     BuildRelationKey(wrapper_id, directory_relation, distance, key);
-    // 如果能够找到关系，那么就是目录
-    if (wrapper_handle->get_relation(key, next_wrapper_id) ) {
+ 
+    if (wrapper_handle->read_relation(key, next_wrapper_id) ) {
         return true;
     }
     return false;
@@ -79,7 +60,11 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
     std::string result;
 
     // 如果能够找到，那么就是文件
-     if (wrapper_handle->get_entries(key, result)) {
+    if (wrapper_handle->get_entry(ino, primary_attr)) {
+        return true;
+    }
+
+    if(wrapper_handle->read_entries(key, result)) {
         entry_value eval(result);
         if(eval.find(primary_attr, ino))  {
             return true;
@@ -151,9 +136,7 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 
 }
 
-// bug: 在get_entries过程中出现了段错误，原因出自于delete metadata，在这个过程中metadata的地址发生了几次变化，导致delete不掉了 (solved)
-// bug: 在get_entries过程中出现了段错误 (solved 查找成功可以delete，查找失败则不能)
-// FIXME: 这里的逻辑可以省略，直接拿metadata就行 （是的，已经修改了）
+
 bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
 
     stat = rnode_handle->get_rnode(ino);
@@ -181,7 +164,7 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
     std::string lval;
     BuildLocationKey(wrapper_id, directory_relation, key);
 
-    if (!wrapper_handle->get_location(key, lval)) {
+    if (!wrapper_handle->read_location(key, lval)) {
         if (ENABELD_LOG) {
             spdlog::warn("getattr: return failed");
         }
@@ -247,8 +230,7 @@ bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
     }
 }
 
-// bug: 现有的PathLookup，无法获取新目录或新文件的元数据 (solved)
-// bug: 多层目录的访问还存在bug，问题出现在路径解析方法中 (solved: 创建目录时没有创建entries)
+
  int wrapperfs::Getattr(const char* path, struct stat* statbuf) {
 
     bool is_file;
@@ -346,40 +328,14 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     max_ino = max_ino + 1;
     size_t ino = max_ino;
 
-    std::future<bool> ret = std::async(std::launch::async, &wrapperfs::UpdateMetadata1, this,
-        mode | S_IFREG, dev, ino);
+    UpdateMetadata1(mode | S_IFREG, dev, ino);
 
-    
-    // 还需要将文件名作为额外元数据写进去
-    entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
-
-    std::string result;
-
-    // bug: 这里的缓存会失效！（solved）
-    if (!wrapper_handle->get_entries(key, result)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("mknod error: cannot get name metadata.");
-        }
-        return -ENONET;
-    } 
-
-    if(ret.get() == false) {
-        return -ENONET;
-    }
-
-    entry_value eval(result);
-    eval.push(filename, ino);
-    result = eval.ToString();
-    if(!wrapper_handle->put_entries(key, result)) {
+    if(!wrapper_handle->put_entry(wrapper_id, file_handle, ino)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot put name metadata into db.");
         }
         return -ENONET;
     }
-
-
-
     return 0;
 }
 
@@ -527,9 +483,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
 }
 
 
-// bug: 为什么数据读不出来呀，明明已经读到了，但是没办法显示 (solved)
-// 办法1：先直接读取一个固定的文件数据，看看能否读取出来 结果：还是获得不了数据
-// 办法2：查资料发现：在进行read操作之前，FUSE会先调用getattr()，然后用文件的size属性阶段read操作的结果
  int wrapperfs::Read(const char* path, char* buf, size_t size, off_t offset, struct fuse_file_info* file_info) {
 
     std::string path_string = path;
@@ -587,7 +540,6 @@ int wrapperfs::Unlink(const char *path) {
 
     std::string filename;
     size_t ino;
-    bool is_remove = false;
     size_t wrapper_id = ROOT_WRAPPER_ID;
 
     op_s.unlink += 1;
@@ -599,28 +551,44 @@ int wrapperfs::Unlink(const char *path) {
         PathResolution(path_items, wrapper_id);
     }
 
-    entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
+    ino = wrapper_handle->get_entry(wrapper_id, filename);
 
-    std::string result;
-    if (!wrapper_handle->get_entries(key, result)) {
+    while (ino == 0) {
+        entry_key key;
+        BuildEntryKey(wrapper_id, directory_relation, key);
+
+        std::string result;
+        if (!wrapper_handle->read_entries(key, result)) {
+            return -ENOENT;
+        }
+
+        ino = wrapper_handle->get_entry(wrapper_id, filename);
+    }
+
+    if(!wrapper_handle->remove_entry(wrapper_id, filename)) {
         if (ENABELD_LOG) {
             spdlog::warn("unlink error, cannot get entries");
         }
         return -ENOENT;
     }
 
-    entry_value eval(result);
-    if(eval.find(filename, ino)) {
-        rnode_key key;
-        BuildRnodeKey(ino, key);
-        // 删除元数据
-        if(!rnode_handle->delete_rnode(key)) {
+    rnode_key key;
+    BuildRnodeKey(ino, key);
+
+    if(!rnode_handle->delete_rnode(key)) {
             if (ENABELD_LOG) {
                 spdlog::warn("delete file error");
             }
             return -ENOENT;
-        }
+    }
+
+   
+
+    entry_value eval(result);
+    if(eval.find(filename, ino)) {
+      
+        // 删除元数据
+        
         eval.remove(filename);
         is_remove = true;
     }
@@ -634,10 +602,7 @@ int wrapperfs::Unlink(const char *path) {
             return -ENOENT;
         }
 
-        // 删除真实的文件
-        std::string real_path = path;
-        GetFilePath(ino, real_path);
-        return unlink(real_path.c_str());
+        //  
     } else {
         if (ENABELD_LOG) {
             spdlog::warn("delete file error, can not find the deleted file.");

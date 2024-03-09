@@ -14,3 +14,6 @@ wrapperfs2 is the new version of wrappers.
 
 
 2024-3-7 using Async mode to acclerate pathlookup, mkmod, mkdir, readdir, rmdir, but the performance hasn't imporve as think as.
+
+
+2024-3-8 Cache optimization is unfinish.

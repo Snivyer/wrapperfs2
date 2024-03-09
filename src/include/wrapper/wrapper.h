@@ -204,10 +204,16 @@ struct location_header {
 
 
 struct wrapper_entry {
-    struct stat* stat;
     ATTR_LIST* entries;
     ATTR_LIST* relations;
-}
+    bool entries_is_dirty;
+
+    wrapper_entry() {
+        entries = nullptr;
+        relations = nullptr;
+        entries_is_dirty = false;
+    }
+};
 
 
 class WrapperHandle {
@@ -215,46 +221,45 @@ class WrapperHandle {
 private:
     LevelDBAdaptor* adaptor;
 
-
-    std::unordered_map<std::string, std::string> entries_cache;
     std::unordered_map<std::string, size_t> relation_cache;
     std::unordered_map<std::string, std::string> location_cache;
     std::unordered_map<size_t, wrapper_entry> wrapper_cache;
+    bool relation_is_dirty;
+    bool relation_is_changing;
 
 public:
     WrapperHandle(LevelDBAdaptor* adaptor);
     ~WrapperHandle();
 
-    struct stat* get_wrapper_stat(size_t wrapper_id);
-    size_t get_relation(size_t wrapper_id, std::string filename);
-
-    size_t get_entry(size_t ino, std::string filename);
-    bool get_entries(entry_key &key, std::string &eval);
-    bool delete_entries(entry_key &key);
-    bool update_entries(entry_key &key);
-
-
-    bool get_relation(relation_key &key, size_t &next_wrapper_id);
-    bool ::put_relation_cache(relation_key &key, size_t next_wrapper_id);
-
-    bool delete_relation(relation_key &key);
-    bool get_range_relations(relation_key &key, ATTR_LIST &wid2attr);
     
+    // 缓存操作
+    size_t get_entry(size_t ino, std::string filename);
+    bool remove_entry(size_t wrapper_id, std::string filename);
+    bool put_entry(size_t wrapper_id, std::string filename, size_t ino);
+    void put_relation(relation_key &key, size_t next_wrapper_id);
+  
+
+    // 磁盘操作
+    bool read_entries(entry_key &key, std::string &eval);
+    bool write_empty_entries(entry_key &key);
+    bool delete_entries(entry_key &key);
+
+    bool read_relation(relation_key &key, size_t &next_wrapper_id);
+    bool read_cache_relation(relation_key &key, size_t &next_wrapper_id);
+    bool read_range_relations(relation_key &key, ATTR_LIST &wid2attr)
+    bool delete_relation(relation_key &key);
 
 
-    bool get_location(location_key &key, std::string &lval);
-    bool put_location(location_key &key, std::string &lval);
+    bool read_location(location_key &key, std::string &lval);
+    bool write_location(location_key &key, std::string &lval);
     bool delete_location(location_key &key);  
 
 
 private:
-    bool put_entries(entry_key &key, std::string &eval);
-    bool put_relation();
-    bool clear_wrapper_cache(location_key &key);
-
-
-
-
+    bool write_entries(entry_key &key, std::string &eval);
+    bool write_relation(); 
+    bool load_wrapper_cache(location_key &key);
+    void clear_wrapper_cache(location_key &key);
 };
 
 
