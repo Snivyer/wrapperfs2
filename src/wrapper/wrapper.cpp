@@ -9,13 +9,17 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 
 WrapperHandle::~WrapperHandle() {
     this->adaptor = nullptr;
-   
     entries_cache.clear();
     location_cache.clear();
     relation_cache.clear();
 }
 
-bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
+void WrapperHandle::cache_entries(entry_key &key, entry_value* &eval) {
+    entries_cache.insert({key.ToString(), eval});
+}
+
+
+bool WrapperHandle::get_entries(entry_key &key, entry_value* &eval) {
 
     io_s.entry_read += 1;
     auto ret = entries_cache.find(key.ToString());
@@ -25,34 +29,33 @@ bool WrapperHandle::get_entries(entry_key &key, std::string &eval) {
         return true;
     }
 
-    if (!adaptor->GetValue(key.ToString(), eval)) {
+    std::string result;
+    if (!adaptor->GetValue(key.ToString(), result)) {
         if(ENABELD_LOG) {
             spdlog::warn("get entries tag - {} wrapper_id - {}: entries doesn't exist", key.tag, key.wrapper_id);
         }
+        eval = nullptr;
         return false;
     }
 
+    eval = new entry_value(result);
     io_s.entry_cache_miss += 1;
-    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
+    entries_cache.insert({key.ToString(), eval});
     return true;
 }
 
-// 已delete
-bool WrapperHandle::put_entries(entry_key &key, std::string &eval) {
+// 不对外访问
+bool WrapperHandle::put_entries(std::string key, std::string &eval) {
 
-    if (!adaptor->Insert(key.ToString(), eval)) {
-        if(ENABELD_LOG) {
-            spdlog::warn("put entries tag - {} wrapper_id - {}: kv store interanl error", key.tag, key.wrapper_id);
-        }
+    if (!adaptor->Insert(key, eval)) {
         return false;
     }
 
-    // 写入的时候，先把缓存里的旧的删除，然后加入新的
-    auto ret = entries_cache.find(key.ToString());
+    // 写入的时候，只需要更新一下缓存里面的标记
+    auto ret = entries_cache.find(key);
     if (ret != entries_cache.end()) {
-        entries_cache.erase(key.ToString());
+        ret->second->is_dirty = false;
     }
-    entries_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), eval));
     return true;
 }
 
@@ -63,6 +66,7 @@ bool WrapperHandle::delete_entries(entry_key &key) {
     // 删除缓存
     auto ret = entries_cache.find(key.ToString());
     if (ret != entries_cache.end()) {
+        delete ret->second;
         entries_cache.erase(key.ToString());
     }
 
@@ -83,9 +87,15 @@ bool WrapperHandle::get_relation(relation_key &key, size_t &next_wrapper_id) {
 
     auto ret = relation_cache.find(key.ToString());
     if (ret != relation_cache.end()) {
-
         io_s.relation_cache_hit += 1;
         next_wrapper_id = ret->second;
+        return true;
+    } 
+
+    auto ret1 = relation_read_only_cache.find(key.ToString());
+    if (ret1 != relation_read_only_cache.end()) {
+        io_s.relation_cache_hit += 1;
+        next_wrapper_id = ret1->second;
         return true;
     } 
 
@@ -97,31 +107,26 @@ bool WrapperHandle::get_relation(relation_key &key, size_t &next_wrapper_id) {
         }
         return false;
     }
-
     next_wrapper_id = std::stoi(rval);
+    relation_read_only_cache[key.ToString()] = next_wrapper_id;
     return true;
 }
 
+ void WrapperHandle::cache_relation(relation_key &key, size_t &next_wrapper_id) {
+    relation_cache[key.ToString()] = next_wrapper_id;
+ }
 
 
-bool WrapperHandle::put_relation(relation_key &key, size_t &next_wrapper_id) {
+bool WrapperHandle::put_relation(std::string key, size_t &next_wrapper_id) {
     
     io_s.relation_write += 1;
     std::string rval = std::to_string(next_wrapper_id);
-    
-    if (!adaptor->Insert(key.ToString(), rval)) {
-        if(ENABELD_LOG) {
-            spdlog::warn("put relation tag - {} wrapper_id - {} distance - {}: kv store interanl error", key.tag, key.wrapper_id, key.distance);
-        }
-     
+
+    if (!adaptor->Insert(key, rval)) {
         return false;
     }
 
-    auto ret = relation_cache.find(key.ToString());
-    if (ret != relation_cache.end()) {
-        relation_cache.erase(key.ToString());
-    }
-    relation_cache.insert(std::unordered_map<std::string, size_t>::value_type(key.ToString(), next_wrapper_id));
+    relation_read_only_cache[key] = next_wrapper_id;
     return true;
 }
 
@@ -133,25 +138,31 @@ bool WrapperHandle::delete_relation(relation_key &key) {
     auto ret = relation_cache.find(key.ToString());
     if (ret != relation_cache.end()) {
         relation_cache.erase(key.ToString());
-    }
+        return true;
+    } else {
 
-    if (!adaptor->Remove(key.ToString())) {
-        if(ENABELD_LOG) {
-            spdlog::warn("cannot delete relation");
+        auto ret1 = relation_read_only_cache.find(key.ToString());
+        if (ret1 != relation_read_only_cache.end()) {
+            relation_read_only_cache.erase(key.ToString());
         }
-        return false;
-    }
 
-    return true;
+        if (!adaptor->Remove(key.ToString())) {
+            if(ENABELD_LOG) {
+                spdlog::warn("cannot delete relation");
+            }
+            return false;
+        }
+        return true;
+    }
 }
 
- bool WrapperHandle::get_range_relations(relation_key &key, ATTR_LIST &wid2attr) {
-    
+ bool WrapperHandle::get_range_relations(relation_key &key,  ATTR_STR_LIST* &wid2attr) {
+
+    wid2attr->clear(); 
     io_s.relation_range_read += 1;
 
     std::string leftkey = key.ToLeftString();
     std::string rightkey = key.ToRightString();
-
     ATTR_STR_LIST id_list;
 
     if (!adaptor->GetRange(leftkey, rightkey, id_list)) {
@@ -164,10 +175,26 @@ bool WrapperHandle::delete_relation(relation_key &key) {
     for (auto &id_pair : id_list) {
         // 可以分割出文件名
         std::vector<std::string> items = split_string(id_pair.first, ":");
-        wid2attr.emplace_back(std::pair(items[items.size() - 1], std::stoi(id_pair.second)));
+        wid2attr->emplace_back(std::pair(items[items.size() - 1], id_pair.second));
     
     }
     return true;
+ }
+
+ ATTR_STR_LIST* WrapperHandle::get_relations(relation_key &key) {
+
+    // 将脏的relation写下去
+    for(auto item: relation_cache) {
+        put_relation(item.first, item.second);
+    } 
+    relation_cache.clear();
+
+    ATTR_STR_LIST* id_list = new ATTR_STR_LIST;
+    if(get_range_relations(key, id_list)) {
+        return id_list;
+    } 
+    
+    return nullptr;
  }
 
 // bug: 不需要delete了，因为已经缓存了
@@ -190,7 +217,7 @@ bool WrapperHandle::get_location(location_key &key, std::string &lval) {
     }
 
     io_s.location_cache_miss += 1;
-    location_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), lval));
+    location_cache.insert({key.ToString(), lval});
     return true;
 }
 
@@ -210,7 +237,7 @@ bool WrapperHandle::put_location(location_key &key, std::string &lval) {
     if (ret != location_cache.end()) {
         location_cache.erase(key.ToString());   
     }
-    location_cache.insert(std::unordered_map<std::string, std::string>::value_type(key.ToString(), lval));
+    location_cache.insert({key.ToString(), lval}); 
     return true;
 }
 
@@ -231,4 +258,25 @@ bool WrapperHandle::delete_location(location_key &key) {
     }
     return true;
 }
+
+void WrapperHandle::flush() {
+
+    // 将脏的entries写下去
+    for(auto item: entries_cache) {
+        if(item.second->is_dirty == true) {
+            std::string eval = item.second->ToString();
+            put_entries(item.first, eval);
+        }
+    }
+
+    // 将脏的relation写下去
+    for(auto item: relation_cache) {
+        put_relation(item.first, item.second);
+    } 
+    
+    relation_cache.clear();
+
+}
+
+
 }

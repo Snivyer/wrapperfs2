@@ -22,7 +22,6 @@ enum wrapper_tag {
     directory_relation,
 };
 
-
 struct entry_key {
     wrapper_tag tag;
     size_t wrapper_id;
@@ -34,17 +33,27 @@ struct entry_key {
     }
 };
 
-
-
 struct entry_value {
-    
     size_t size;
     char* entry;
-    entry_value(): size(0), entry(NULL) {}
+    bool is_dirty;
+
+    entry_value(): size(0), entry(nullptr) {
+        is_dirty = false;
+    }
+
     entry_value(std::string &val) {
         size = val.size();
         entry = new char[size];
         memcpy(entry, val.data(), size);
+        is_dirty = false;
+    }
+
+    ~entry_value() {
+        if(entry != nullptr) {
+            delete entry;
+            size = 0;
+        }
     }
 
     std::string ToString() {
@@ -65,10 +74,16 @@ struct entry_value {
         memcpy(new_entry + size + str.size() + 1, &ino, sizeof(size_t));
         entry = new_entry;
         size = new_size;
+        is_dirty = true;
         return true;
     }
 
     bool find(std::string str, size_t &ino) {
+
+        if(size == 0) {
+            return false;
+        }
+
         char* entry_back = entry;
         while (strcmp(entry_back, str.data()) != 0) {
       
@@ -86,6 +101,10 @@ struct entry_value {
 
     bool remove(std::string str) {
 
+        if(size == 0) {
+            return false;
+        }
+
         char* entry_back = entry;
         while (strcmp(entry_back, str.data()) != 0) {
       
@@ -101,12 +120,16 @@ struct entry_value {
         size_t skip = entry_back - entry; 
         memcpy(entry_back, entry_back + start, size - start - skip);
         size -= start;
-
-
+        is_dirty = true;
         return true;
     }
 
-    void ToList(std::vector<std::pair<std::string, size_t>> &list) {
+    bool ToList(std::vector<std::pair<std::string, size_t>> &list) {
+
+        if(size == 0) {
+            return false;
+        }
+
         char* entry_back = entry;
         size_t count = 0;
         while(count != size) {
@@ -121,9 +144,16 @@ struct entry_value {
             count += len + 1 + sizeof(size_t);
             entry_back += len + 1 + sizeof(size_t);
         }
+
+        return true;
     }
 
-    void ToList(std::vector<std::string> &list) {
+    bool ToList(std::vector<std::string> &list) {
+
+        if(size == 0) {
+            return false;
+        }
+
         char* entry_back = entry;
         size_t count = 0;
         while(count != size) {
@@ -133,10 +163,10 @@ struct entry_value {
             count += len + 1 + sizeof(size_t);
             entry_back += len + 1 + sizeof(size_t);
         }
+        return true;
     }
 
     std::string ToString(std::vector<std::pair<std::string, size_t>> &list) {
-
         size_t count = 0;
         for(auto item: list) {
             count += item.first.size();
@@ -156,7 +186,6 @@ struct entry_value {
         }
         return ToString();
     }
-
 };
 
 struct relation_key {
@@ -185,7 +214,6 @@ struct relation_key {
     }
 };
 
-
 struct location_key {
     wrapper_tag tag;
     size_t wrapper_id;
@@ -202,43 +230,40 @@ struct location_header {
 };
 
 
-
-
-
 class WrapperHandle {
 
 private:
     LevelDBAdaptor* adaptor;
-    std::unordered_map<std::string, std::string> entries_cache;
+    std::unordered_map<std::string, entry_value*> entries_cache;
     std::unordered_map<std::string, size_t> relation_cache;
+    std::unordered_map<std::string, size_t> relation_read_only_cache;
     std::unordered_map<std::string, std::string> location_cache;
+
+
+    bool put_entries(std::string key, std::string &eval);
+    bool put_relation(std::string key, size_t &next_wrapper_id);
+    bool get_range_relations(relation_key &key, ATTR_STR_LIST* &wid2attr);
+ 
 
 
 public:
     WrapperHandle(LevelDBAdaptor* adaptor);
     ~WrapperHandle();
 
-    bool get_entries(entry_key &key, std::string &eval);
-    bool put_entries(entry_key &key, std::string &eval);
+    void cache_entries(entry_key &key, entry_value* &eval);
+    bool get_entries(entry_key &key, entry_value* &eval);
     bool delete_entries(entry_key &key);
 
-
+    void cache_relation(relation_key &key, size_t &next_wrapper_id);
     bool get_relation(relation_key &key, size_t &next_wrapper_id);
-    bool put_relation(relation_key &key, size_t &next_wrapper_id);
     bool delete_relation(relation_key &key);
-    bool get_range_relations(relation_key &key, ATTR_LIST &wid2attr);
+    ATTR_STR_LIST* get_relations(relation_key &key);
     
-
-
     bool get_location(location_key &key, std::string &lval);
     bool put_location(location_key &key, std::string &lval);
     bool delete_location(location_key &key);   
 
-
-
-
-
-
+    void flush();
 
 };
 

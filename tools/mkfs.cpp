@@ -39,17 +39,11 @@ int main(int argc, char *argv[]) {
     ekey.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
     ekey.tag = wrapperfs::directory_relation; 
 
-    wrapperfs::entry_value eval;
-    std::string result = eval.ToString();
-    if(!handle->put_entries(ekey, result)) {
-        if (wrapperfs::ENABELD_LOG) {
-            spdlog::warn("mkfs error: cannot create the root wrapper entries.");
-        }
-        return false;
-    }
+    wrapperfs::entry_value* eval = new wrapperfs::entry_value;
+    eval->is_dirty = true;
+    handle->cache_entries(ekey, eval);
+    handle->flush();
     
     spdlog::debug("wrapperfs mkfs success!");
-
-
     return 0;
 }

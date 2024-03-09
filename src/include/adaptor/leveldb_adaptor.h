@@ -14,7 +14,7 @@ public:
     bool Insert(const std::string &key, const std::string &value);
     bool GetValue(const std::string &key, std::string &value);
     bool Remove(const std::string &key);
-    bool GetRange(const std::string &start_key, const std::string &end_key, std::vector<std::pair<std::string, std::string>> &key_value_pair_list);
+    bool GetRange(const std::string &start_key, const std::string &end_key, std::vector<std::pair<std::string, std::string>>& key_value_pair_list);
 
 private:
     leveldb::DB* db_;
