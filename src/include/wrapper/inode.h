@@ -3,7 +3,7 @@
 #include <string>
 #include <sstream>
 #include <sys/stat.h>
-#include <unordered_map>
+#include <map>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 
@@ -11,6 +11,13 @@
 #include "adaptor/leveldb_adaptor.h"
 
 namespace wrapperfs {
+
+
+enum rnode_status {
+    read,
+    write,
+    remove,
+};
 
 
 struct rnode_key {
@@ -28,20 +35,29 @@ struct rnode_header {
     struct stat fstat;
 };
 
+struct buff_entry {
+    rnode_header* rh;
+    rnode_status stat;
+};
+
 
 // inode
 class RnodeHandle {
 private:
     LevelDBAdaptor* adaptor;
-    std::unordered_map<std::string, std::string> cache;
+    std::map<size_t, buff_entry> buff;
+    bool put_rnode(size_t ino);
+    bool delete_rnode(size_t ino);
 
 public:
     RnodeHandle(LevelDBAdaptor* adaptor);
     ~RnodeHandle();
 
-    bool get_rnode(rnode_key &key, std::string &value);
-    bool put_rnode(rnode_key &key, std::string value);
-    bool delete_rnode(rnode_key &key);
+    bool get_rnode(size_t ino, rnode_header* &rh);
+    void write_rnode(size_t ino, rnode_header* &rh, rnode_status state = rnode_status::write);
+    void change_stat(size_t ino, rnode_status state = rnode_status::write);
+    bool sync(size_t ino);
+
 };
 
 }

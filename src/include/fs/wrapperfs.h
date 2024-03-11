@@ -52,12 +52,12 @@ private:
     bool PathResolution(std::vector<std::string> &path_items, size_t &wrapper_id_in_search);
     bool WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance);
     bool EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr);
-    bool GetFileStat(size_t &ino, struct stat *stat);
+    bool GetFileStat(size_t &ino, struct stat* stat);
     bool GetWrapperStat(size_t wrapper_id, struct stat *stat);
     void InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev);
     bool UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id);
     bool UpdateMetadata(mode_t mode, dev_t dev, size_t ino);
-    bool UpdateMetadata(struct stat &stat, size_t ino);
+
 
 
 

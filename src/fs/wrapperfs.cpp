@@ -3,9 +3,6 @@
 namespace wrapperfs {
 
 
-inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
-    key.rnode_id = ino;
-}
 
 inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
     key.tag = tag;
@@ -22,6 +19,11 @@ inline static void BuildRelationKey(size_t wrapper_id, wrapper_tag tag,
 inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &key)  {
     key.wrapper_id = wrapper_id;
     key.tag = tag;
+}
+
+
+struct stat* GetMetadata(rnode_header* &rh) {
+    return reinterpret_cast<struct stat*> (rh);
 }
 
 const struct stat* GetMetadata(std::string &value) {
@@ -148,22 +150,18 @@ bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, 
 
 }
 
-
-// FIXME: 这里的逻辑可以省略，直接拿metadata就行 （是的，已经修改了）
-bool wrapperfs::GetFileStat(size_t &ino, struct stat *stat) {
-
-    rnode_key key;
-    BuildRnodeKey(ino, key);
-
-    std::string value;
-    if (!rnode_handle->get_rnode(key, value)) 
+// 这是返回给
+bool wrapperfs::GetFileStat(size_t &ino, struct stat* stat) {
+   
+    rnode_header* rh;
+    if (!rnode_handle->get_rnode(ino, rh))
     {
         if (ENABELD_LOG) {
             spdlog::warn("cannot get file stat");
         }
             return false;
     } else {
-        *stat = *(GetMetadata(value));
+        memcpy(stat, rh, sizeof(struct stat));
         return true;
     }
 }
@@ -189,38 +187,9 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
 // bug: 一进入这个函数就会报错，初步还以是rnode_value &rval的问题
 bool wrapperfs::UpdateMetadata(mode_t mode, dev_t dev, size_t ino) {
 
-    
-    rnode_key key;
-    BuildRnodeKey(ino, key);
     rnode_header* header = new rnode_header;
     InitStat(header->fstat, ino, mode, dev);
-    std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
-  
-    if (!rnode_handle->put_rnode(key, header_value)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("update metadata error.");
-        }
-        return false;
-    }
-    return true;
-}
-
-
-bool wrapperfs::UpdateMetadata(struct stat &stat, size_t ino) {
-
-    rnode_key key;
-    BuildRnodeKey(ino, key);
-
-    rnode_header* header = new rnode_header;
-    std::memcpy(&(header->fstat), &stat, sizeof(struct stat));
-    std::string header_value = std::string(reinterpret_cast<const char*>(header), sizeof(rnode_header));
-  
-    if (!rnode_handle->put_rnode(key, header_value)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("update metadata error.");
-        }
-        return false;
-    }
+    rnode_handle->write_rnode(ino, header);
     return true;
 }
 
@@ -430,20 +399,22 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
         return -ENOENT;
     }
 
-    if(!GetFileStat(ino, &(fh->stat))) {
+    rnode_header* header;
 
+    if(!rnode_handle->get_rnode(ino, header)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
         }
         return -ENOENT;
     }
 
+    fh->stat = GetMetadata(header);
     fh->ino = ino;
     fh->flags = file_info->flags;
     std::string real_path;
     GetFilePath(ino, real_path);
 
-    fh->fd = open(real_path.c_str(), file_info->flags | O_CREAT, fh->stat.st_mode);
+    fh->fd = open(real_path.c_str(), file_info->flags | O_CREAT, fh->stat->st_mode);
     if(fh->fd < 0) {
 
         if (ENABELD_LOG) {
@@ -468,7 +439,7 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
 
     if (fh->fd < 0) { 
         GetFilePath(fh->ino, path_string);
-        fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat.st_mode);
+        fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat->st_mode);
     }
     int ret;
     if (fh->fd >= 0) {
@@ -490,7 +461,7 @@ int wrapperfs::Write(const char* path, const char* buf, size_t size, off_t offse
 
     if (fh->fd < 0) {
         GetFilePath(fh->ino, path_string);
-        fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat.st_mode);
+        fh->fd = open(path_string.c_str(), fh->flags | O_CREAT, fh->stat->st_blksize);
     }
 
     int ret;
@@ -504,10 +475,10 @@ int wrapperfs::Write(const char* path, const char* buf, size_t size, off_t offse
     }
     // FIXME: 写完数据以后，记得及时更新文件大小
     if(ret > 0) {
-        fh->stat.st_size = offset + size;
+        fh->stat->st_size = offset + size;
           
         // 将更新好的数据写回DB
-        UpdateMetadata(fh->stat, fh->ino);
+        rnode_handle->change_stat(fh->ino);
     }
     return ret;
 }
@@ -540,15 +511,8 @@ int wrapperfs::Unlink(const char *path) {
     }
 
     if(eval->find(filename, ino)) {
-        rnode_key key;
-        BuildRnodeKey(ino, key);
-        // 删除元数据
-        if(!rnode_handle->delete_rnode(key)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("delete file error");
-            }
-            return -ENOENT;
-        }
+
+        rnode_handle->change_stat(ino, rnode_status::remove);
         eval->remove(filename);
         is_remove = true;
     }
@@ -572,13 +536,14 @@ int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
     file_handle_t* fh = reinterpret_cast<file_handle_t*> (file_info->fh);
     op_s.release += 1;
 
-    fh->stat.st_atim.tv_sec  = time(NULL);
-    fh->stat.st_atim.tv_nsec = 0;
-    fh->stat.st_mtim.tv_sec  = time(NULL);
-    fh->stat.st_mtim.tv_nsec = 0;
+    fh->stat->st_atim.tv_sec  = time(NULL);
+    fh->stat->st_atim.tv_nsec = 0;
+    fh->stat->st_mtim.tv_sec  = time(NULL);
+    fh->stat->st_mtim.tv_nsec = 0;
 
     // 将更新好的数据写回DB
-    UpdateMetadata(fh->stat, fh->ino);
+    rnode_handle->change_stat(fh->ino);
+  //  rnode_handle->sync(fh->ino);
 
     if(fh->fd != -1 ) {
         close(fh->fd);
@@ -800,7 +765,7 @@ int wrapperfs::Access(const char* path, int mask) {
 int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
 
   
-    struct stat stat;
+    rnode_header *header;
     std::string filename;
     size_t ino;
     op_s.utimens += 1;
@@ -820,7 +785,7 @@ int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
         return -ENOENT;
     }
 
-    if(!GetFileStat(ino, &stat)) {
+    if(!rnode_handle->get_rnode(ino, header)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
         }
@@ -828,13 +793,11 @@ int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
     }
 
     // 更新时间
-    stat.st_atim.tv_sec  = tv[0].tv_sec;
-    stat.st_atim.tv_nsec = tv[0].tv_nsec;
-    stat.st_mtim.tv_sec  = tv[1].tv_sec;
-    stat.st_mtim.tv_nsec = tv[1].tv_nsec;
-
-    // 将更新好的数据写回DB
-    UpdateMetadata(stat, ino);
+    header->fstat.st_atim.tv_sec  = tv[0].tv_sec;
+    header->fstat.st_atim.tv_nsec = tv[0].tv_nsec;
+    header->fstat.st_mtim.tv_sec  = tv[1].tv_sec;
+    header->fstat.st_mtim.tv_nsec = tv[1].tv_nsec;
+    rnode_handle->change_stat(ino);
 
     if (ENABELD_LOG) {
         spdlog::debug("updateTimes");
@@ -848,6 +811,7 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     std::string filename;
     size_t wrapper_id;
     size_t ino;
+    rnode_header *header;
     struct stat statbuf;
 
     op_s.chmod += 1;
@@ -861,15 +825,14 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     }
 
     if (is_file == true)   {
-        if(!GetFileStat(ino, &statbuf)) {
+        if(!rnode_handle->get_rnode(ino, header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
             }
             return -ENOENT;
         }
-        statbuf.st_mode = mode;
-        UpdateMetadata(statbuf, ino);
-
+        header->fstat.st_mode = mode;
+        rnode_handle->change_stat(ino);
     } else {
         if(!GetWrapperStat(wrapper_id, &statbuf)) {
             if (ENABELD_LOG) {
@@ -890,6 +853,7 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     size_t wrapper_id;
     size_t ino;
     struct stat statbuf;
+    rnode_header *header;
 
     op_s.chown += 1;
 
@@ -902,16 +866,16 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     }
 
     if (is_file == true)   {
-        if(!GetFileStat(ino, &statbuf)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("getattr: get file stat error");
-            }
-            return -ENOENT;
-        }
-        statbuf.st_gid = gid;
-        statbuf.st_uid = uid;
-        UpdateMetadata(statbuf, ino);
 
+        if(!rnode_handle->get_rnode(ino, header)) {
+                if (ENABELD_LOG) {
+                spdlog::warn("chown: get file stat error");
+                }
+        } else {
+            header->fstat.st_gid = gid;
+            header->fstat.st_uid = uid;
+            rnode_handle->change_stat(ino, rnode_status::write);
+        }
     } else {
         if(!GetWrapperStat(wrapper_id, &statbuf)) {
             if (ENABELD_LOG) {
