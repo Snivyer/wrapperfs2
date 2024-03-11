@@ -13,7 +13,7 @@
 namespace wrapperfs {
 
 
-enum rnode_status {
+enum metadata_status {
     read,
     write,
     remove,
@@ -37,7 +37,7 @@ struct rnode_header {
 
 struct buff_entry {
     rnode_header* rh;
-    rnode_status stat;
+    metadata_status stat;
 };
 
 
@@ -53,9 +53,9 @@ public:
     RnodeHandle(LevelDBAdaptor* adaptor);
     ~RnodeHandle();
 
-    bool get_rnode(size_t ino, rnode_header* &rh);
-    void write_rnode(size_t ino, rnode_header* &rh, rnode_status state = rnode_status::write);
-    void change_stat(size_t ino, rnode_status state = rnode_status::write);
+    bool get_rnode(size_t ino, struct rnode_header* &rh);
+    void write_rnode(size_t ino, struct rnode_header* &rh, metadata_status state = metadata_status::write);
+    void change_stat(size_t ino, metadata_status state = metadata_status::write);
     bool sync(size_t ino);
 
 };

@@ -3,6 +3,10 @@
 namespace wrapperfs {
 
 
+struct stat* GetMeta(std::string &value) {
+    return reinterpret_cast<struct stat*> (value.data());
+}
+
 inline static void BuildRnodeKey(size_t ino, rnode_key &key) {
     key.rnode_id = ino;
 }
@@ -18,17 +22,17 @@ RnodeHandle::~RnodeHandle() {
     this->adaptor = nullptr;
 }
 
-void RnodeHandle::change_stat(size_t ino, rnode_status state) {
+void RnodeHandle::change_stat(size_t ino, metadata_status state) {
     buff[ino].stat = state;
 }
 
-void RnodeHandle::write_rnode(size_t ino, rnode_header* &rh, rnode_status state) {
+void RnodeHandle::write_rnode(size_t ino, struct rnode_header* &rh, metadata_status state) {
     buff[ino].rh = rh;
     buff[ino].stat = state;
 }
 
 
-bool RnodeHandle::get_rnode(size_t ino, rnode_header* &rh) {
+bool RnodeHandle::get_rnode(size_t ino, struct rnode_header* &rh) {
 
     io_s.metadata_read += 1;
 
@@ -37,7 +41,7 @@ bool RnodeHandle::get_rnode(size_t ino, rnode_header* &rh) {
         io_s.metadata_cache_hit += 1;
 
         rh = ret->second.rh;
-        if(ret->second.stat != rnode_status::remove) {
+        if(ret->second.stat != metadata_status::remove) {
             return true;
         } else {
             return false;
@@ -47,7 +51,7 @@ bool RnodeHandle::get_rnode(size_t ino, rnode_header* &rh) {
 
     rnode_key key;
     BuildRnodeKey(ino, key);
-    std::string rval = std::string(reinterpret_cast<const char*>(rh), sizeof(rnode_header));
+    std::string rval;
 
     if (!adaptor->GetValue(key.ToString(), rval)) {
         if(ENABELD_LOG) {
@@ -55,8 +59,11 @@ bool RnodeHandle::get_rnode(size_t ino, rnode_header* &rh) {
         }
             return false;
     }
+    rh = new rnode_header;
+    memcpy(&(rh->fstat), GetMeta(rval), sizeof(struct stat));
+
     io_s.metadata_cache_miss += 1;
-    write_rnode(ino, rh, rnode_status::read);
+    write_rnode(ino, rh, metadata_status::read);
     return true;
 }
 
@@ -74,7 +81,7 @@ bool RnodeHandle::put_rnode(size_t ino) {
         }
         return false;
     }
-    change_stat(ino, rnode_status::read);
+    change_stat(ino, metadata_status::read);
     return true;  
 }
 
@@ -98,11 +105,11 @@ bool RnodeHandle::delete_rnode(size_t ino) {
 
 bool RnodeHandle::sync(size_t ino) {
 
-    if(buff[ino].stat == rnode_status::write) {
+    if(buff[ino].stat == metadata_status::write) {
         return put_rnode(ino);
     }
 
-    if(buff[ino].stat == rnode_status::remove) {
+    if(buff[ino].stat == metadata_status::remove) {
         return delete_rnode(ino);
     }
 

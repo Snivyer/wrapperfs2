@@ -6,9 +6,11 @@
 #include <utility>
 #include <sys/stat.h>
 #include <spdlog/spdlog.h>
-#include <nlohmann/json.hpp>
 #include <unordered_map>
+#include <map>
 
+
+#include "wrapper/inode.h"
 #include "common/config.h"
 #include "adaptor/leveldb_adaptor.h"
 #include "utils/string_routine.h"
@@ -21,6 +23,7 @@ using ATTR_STR_LIST = std::vector<std::pair<std::string, std::string>>;
 enum wrapper_tag {
     directory_relation,
 };
+
 
 struct entry_key {
     wrapper_tag tag;
@@ -230,6 +233,11 @@ struct location_header {
 };
 
 
+struct location_buff_entry {
+    location_header* lh;
+    metadata_status stat;
+};
+
 class WrapperHandle {
 
 private:
@@ -237,12 +245,17 @@ private:
     std::unordered_map<std::string, entry_value*> entries_cache;
     std::unordered_map<std::string, size_t> relation_cache;
     std::unordered_map<std::string, size_t> relation_read_only_cache;
-    std::unordered_map<std::string, std::string> location_cache;
+
+    std::map<std::string, location_buff_entry> location_buff;
 
 
     bool put_entries(std::string key, std::string &eval);
     bool put_relation(std::string key, size_t &next_wrapper_id);
     bool get_range_relations(relation_key &key, ATTR_STR_LIST* &wid2attr);
+
+    bool put_location(location_key &key);
+    bool delete_location(location_key &key);
+
  
 
 
@@ -259,11 +272,14 @@ public:
     bool delete_relation(relation_key &key);
     ATTR_STR_LIST* get_relations(relation_key &key);
     
-    bool get_location(location_key &key, std::string &lval);
-    bool put_location(location_key &key, std::string &lval);
-    bool delete_location(location_key &key);   
+    bool get_location(location_key &key, struct location_header* &lh);
+    void write_location(location_key &key, struct location_header* &lh, metadata_status state = metadata_status::write);
+    void change_stat(location_key &key, metadata_status state = metadata_status::write);
 
+    
+    bool sync_location(location_key &key);
     void flush();
+
 
 };
 

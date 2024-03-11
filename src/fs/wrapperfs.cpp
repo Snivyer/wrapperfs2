@@ -26,9 +26,11 @@ struct stat* GetMetadata(rnode_header* &rh) {
     return reinterpret_cast<struct stat*> (rh);
 }
 
-const struct stat* GetMetadata(std::string &value) {
-    return reinterpret_cast<const struct stat*> (value.data());
+struct stat* GetMetadata(location_header* &rh) {
+    return reinterpret_cast<struct stat*> (rh);
 }
+
+
 
 // wrapperfs的初始化过程
 // 初始化的关键参数有：max_ino, max_wrapper_id
@@ -172,42 +174,19 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
     std::string lval;
     BuildLocationKey(wrapper_id, directory_relation, key);
 
-    if (!wrapper_handle->get_location(key, lval)) {
+    location_header* lh;
+
+    if (!wrapper_handle->get_location(key, lh)) {
         if (ENABELD_LOG) {
             spdlog::warn("getattr: return failed");
         }
         return false;
     } else {
-        *stat = *(GetMetadata(lval));
+        memcpy(stat, lh, sizeof(struct stat));
         return true;
     }  
 }
 
-
-// bug: 一进入这个函数就会报错，初步还以是rnode_value &rval的问题
-bool wrapperfs::UpdateMetadata(mode_t mode, dev_t dev, size_t ino) {
-
-    rnode_header* header = new rnode_header;
-    InitStat(header->fstat, ino, mode, dev);
-    rnode_handle->write_rnode(ino, header);
-    return true;
-}
-
-bool wrapperfs::UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id) {
-
-    location_key key;
-    BuildLocationKey(wrapper_id, directory_relation, key);
-    location_header* lheader = new location_header;
-    std::memcpy(&(lheader->fstat), &stat, sizeof(struct stat));
-    std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(location_header));
-
-    if(!wrapper_handle->put_location(key, lval)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("mkdir error: cannot create directory wrapper.");
-        }
-        return -ENONET;
-    }
-}
 
 // bug: 现有的PathLookup，无法获取新目录或新文件的元数据 (solved)
 // bug: 多层目录的访问还存在bug，问题出现在路径解析方法中 (solved: 创建目录时没有创建entries)
@@ -308,8 +287,11 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     size_t ino = max_ino;
 
     // FIXME: mode需要加入S_IFREG，以标注是文件
-    UpdateMetadata(mode | S_IFREG, dev, ino);
-        
+    rnode_header* header = new rnode_header;
+    InitStat(header->fstat, ino, mode | S_IFREG, dev);
+    rnode_handle->write_rnode(ino, header);
+
+
 
     // 还需要将文件名作为额外元数据写进去
     entry_key key;
@@ -342,24 +324,17 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     
     max_wrapper_id = max_wrapper_id + 1;
     size_t create_wrapper_id = max_wrapper_id;
-    struct stat stat;
+
+    location_header* lheader = new location_header;
     // FIXME: 需要加上S_IFDIR，以标记是目录
-    InitStat(stat, create_wrapper_id, mode | S_IFDIR, 0);
+    InitStat(lheader->fstat, create_wrapper_id, mode | S_IFDIR, 0);
+
 
     // 首先创建location，将wrapper写进去
     location_key lkey;
     BuildLocationKey(create_wrapper_id, directory_relation, lkey);
-
-    location_header* lheader = new location_header;
-    std::memcpy(&(lheader->fstat), &stat, sizeof(struct stat));
-    std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(location_header));
-
-    if(!wrapper_handle->put_location(lkey, lval)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("mkdir error: cannot create directory wrapper.");
-        }
-        return -ENONET;
-    }
+    wrapper_handle->write_location(lkey, lheader);
+    
 
     // 还需要将目录关系写进去
     relation_key rkey;
@@ -512,7 +487,7 @@ int wrapperfs::Unlink(const char *path) {
 
     if(eval->find(filename, ino)) {
 
-        rnode_handle->change_stat(ino, rnode_status::remove);
+        rnode_handle->change_stat(ino, metadata_status::remove);
         eval->remove(filename);
         is_remove = true;
     }
@@ -585,15 +560,19 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
             return -ENOENT;
         } 
     }
-    
-    if(!GetWrapperStat(wh->wrapper_id, &(wh->stat))) {
-    
+
+    location_header* header;
+    location_key key;
+    BuildLocationKey(wh->wrapper_id, directory_relation, key);
+
+    if(!wrapper_handle->get_location(key, header)) {
         if (ENABELD_LOG) {
-            spdlog::warn("open: cannot get the stat");
+            spdlog::warn("opendir: cannot get the stat");
         }
         return -ENOENT;
     }
 
+    wh->stat = GetMetadata(header);
     file_info->fh = (uint64_t)wh;
     return 0;
 }
@@ -709,16 +688,10 @@ int wrapperfs::RemoveDir(const char *path) {
         return -ENONET;
     }
 
-    // 删除location
     location_key lkey;
     BuildLocationKey(wrapper_id, directory_relation, lkey);
-    if(!wrapper_handle->delete_location(lkey)) {
-        if (ENABELD_LOG) {
-            spdlog::warn("rmdir error: cannot delete location!");
-        }
-        return -ENONET;
-    }
-
+    wrapper_handle->change_stat(lkey, metadata_status::remove);
+  
     // 删除entries
     entry_key key;
     BuildEntryKey(wrapper_id, directory_relation, key);
@@ -811,11 +784,8 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     std::string filename;
     size_t wrapper_id;
     size_t ino;
-    rnode_header *header;
-    struct stat statbuf;
-
+   
     op_s.chmod += 1;
-
     if(!PathLookup(path, wrapper_id, is_file, filename)) {
 
         if (ENABELD_LOG) {
@@ -825,6 +795,7 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
     }
 
     if (is_file == true)   {
+        rnode_header *header;
         if(!rnode_handle->get_rnode(ino, header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
@@ -834,14 +805,17 @@ int wrapperfs::Chmod(const char *path, mode_t mode) {
         header->fstat.st_mode = mode;
         rnode_handle->change_stat(ino);
     } else {
-        if(!GetWrapperStat(wrapper_id, &statbuf)) {
+        location_key key;
+        BuildLocationKey(wrapper_id, directory_relation, key);
+        location_header* header;
+        if(wrapper_handle->get_location(key, header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
             }
             return -ENOENT; 
         } 
-        statbuf.st_mode = mode;
-        UpdateWrapperMetadata(statbuf, wrapper_id);
+        header->fstat.st_mode = mode;
+        wrapper_handle->change_stat(key);
     }
     return 0;
 }
@@ -852,9 +826,6 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     std::string filename;
     size_t wrapper_id;
     size_t ino;
-    struct stat statbuf;
-    rnode_header *header;
-
     op_s.chown += 1;
 
     if(!PathLookup(path, wrapper_id, is_file, filename)) {
@@ -866,7 +837,7 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
     }
 
     if (is_file == true)   {
-
+        rnode_header *header;
         if(!rnode_handle->get_rnode(ino, header)) {
                 if (ENABELD_LOG) {
                 spdlog::warn("chown: get file stat error");
@@ -874,18 +845,21 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
         } else {
             header->fstat.st_gid = gid;
             header->fstat.st_uid = uid;
-            rnode_handle->change_stat(ino, rnode_status::write);
+            rnode_handle->change_stat(ino);
         }
     } else {
-        if(!GetWrapperStat(wrapper_id, &statbuf)) {
+        location_key key;
+        BuildLocationKey(wrapper_id, directory_relation, key);
+        location_header* header;
+        if(wrapper_handle->get_location(key, header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
             }
             return -ENOENT; 
         } 
-        statbuf.st_gid = gid;
-        statbuf.st_uid = uid;
-        UpdateWrapperMetadata(statbuf, wrapper_id);
+        header->fstat.st_gid = gid;
+        header->fstat.st_uid = uid;
+        wrapper_handle->change_stat(key);
     }
     return 0;
 

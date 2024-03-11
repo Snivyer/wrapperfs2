@@ -3,6 +3,11 @@
 namespace wrapperfs {
 
 
+struct stat* GetMetadata(std::string &value) {
+    return reinterpret_cast<struct stat*> (value.data());
+}
+
+
 WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
     this->adaptor = adaptor;
 }
@@ -10,7 +15,7 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 WrapperHandle::~WrapperHandle() {
     this->adaptor = nullptr;
     entries_cache.clear();
-    location_cache.clear();
+    location_buff.clear();
     relation_cache.clear();
 }
 
@@ -197,18 +202,34 @@ bool WrapperHandle::delete_relation(relation_key &key) {
     return nullptr;
  }
 
+
+void WrapperHandle::change_stat(location_key &key, metadata_status state) {
+    location_buff[key.ToString()].stat = state;
+}
+
+void WrapperHandle::write_location(location_key &key, struct location_header* &lh, metadata_status state) {
+    location_buff[key.ToString()].lh = lh;
+    location_buff[key.ToString()].stat = state;
+}
+  
+
+
 // bug: 不需要delete了，因为已经缓存了
-bool WrapperHandle::get_location(location_key &key, std::string &lval) {
+bool WrapperHandle::get_location(location_key &key, struct location_header* &lh) {
 
     io_s.location_read += 1;
+    auto ret = location_buff.find(key.ToString());
+    if(ret != location_buff.end()) {
+        io_s.metadata_cache_hit += 1;
+        lh = ret->second.lh;
+        if(ret->second.stat != metadata_status::remove) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 
-    auto ret = location_cache.find(key.ToString());
-    if (ret != location_cache.end()) {
-        io_s.location_cache_hit += 1;
-        lval = ret->second;
-        return true;
-    } 
-
+    std::string lval;
     if (!adaptor->GetValue(key.ToString(), lval)) {
         if(ENABELD_LOG) {
             spdlog::warn("get location tag - {} wrapper_id - {}: location doesn't exist", key.tag, key.wrapper_id);
@@ -216,16 +237,21 @@ bool WrapperHandle::get_location(location_key &key, std::string &lval) {
         return false;
     }
 
+    lh = new location_header;
+    memcpy(&(lh->fstat), GetMetadata(lval), sizeof(struct stat));
     io_s.location_cache_miss += 1;
-    location_cache.insert({key.ToString(), lval});
+    write_location(key, lh, metadata_status::read);
     return true;
 }
 
-// 已delete
-bool WrapperHandle::put_location(location_key &key, std::string &lval) {
+
+
+bool WrapperHandle::put_location(location_key &key) {
     
     io_s.location_write += 1;
 
+    location_header* header = location_buff[key.ToString()].lh;
+    std::string lval =  std::string(reinterpret_cast<const char*>(header), sizeof(location_header));
     if (!adaptor->Insert(key.ToString(), lval)) {
         if(ENABELD_LOG) {
             spdlog::warn("put location tag - {} wrapper_id - {}: kv store interanl error", key.tag, key.wrapper_id);
@@ -233,11 +259,7 @@ bool WrapperHandle::put_location(location_key &key, std::string &lval) {
         return false;
     }
     
-    auto ret = location_cache.find(key.ToString());
-    if (ret != location_cache.end()) {
-        location_cache.erase(key.ToString());   
-    }
-    location_cache.insert({key.ToString(), lval}); 
+    change_stat(key, metadata_status::read);
     return true;
 }
 
@@ -245,11 +267,11 @@ bool WrapperHandle::put_location(location_key &key, std::string &lval) {
 bool WrapperHandle::delete_location(location_key &key) {
 
     io_s.location_delete += 1;
-    auto ret = location_cache.find(key.ToString());
-    if (ret != location_cache.end()) {
-        location_cache.erase(key.ToString());
-    }
 
+    if(location_buff[key.ToString()].lh) {
+        delete location_buff[key.ToString()].lh;
+    }
+    location_buff.erase(key.ToString());
     if (!adaptor->Remove(key.ToString())) {
         if(ENABELD_LOG) {
             spdlog::warn("delete location tag - {} wrapper_id - {}: location doesn't exist", key.tag, key.wrapper_id);
@@ -258,6 +280,19 @@ bool WrapperHandle::delete_location(location_key &key) {
     }
     return true;
 }
+
+bool WrapperHandle::sync_location(location_key &key) {
+
+    if(location_buff[key.ToString()].stat == metadata_status::write) {
+        return put_location(key);
+    }
+
+    if(location_buff[key.ToString()].stat == metadata_status::remove) {
+        return delete_location(key);
+    }
+    return true;
+}
+
 
 void WrapperHandle::flush() {
 

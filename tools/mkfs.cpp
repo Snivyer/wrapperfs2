@@ -28,13 +28,9 @@ int main(int argc, char *argv[]) {
     lheader->fstat.st_ino = wrapperfs::ROOT_WRAPPER_ID;
     std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(wrapperfs::location_header));
 
-    if (!handle->put_location(key, lval)) {
-        if (wrapperfs::ENABELD_LOG) {
-            spdlog::warn("mkfs error: cannot create root wrapper!");
-        }
-        return false;
-    }
-
+    handle->write_location(key, lheader);
+    handle->sync_location(key);
+    
     wrapperfs::entry_key ekey;
     ekey.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
     ekey.tag = wrapperfs::directory_relation; 

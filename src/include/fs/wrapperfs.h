@@ -55,8 +55,6 @@ private:
     bool GetFileStat(size_t &ino, struct stat* stat);
     bool GetWrapperStat(size_t wrapper_id, struct stat *stat);
     void InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev);
-    bool UpdateWrapperMetadata(struct stat &stat, size_t wrapper_id);
-    bool UpdateMetadata(mode_t mode, dev_t dev, size_t ino);
 
 
 
