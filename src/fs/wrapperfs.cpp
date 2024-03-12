@@ -4,19 +4,21 @@ namespace wrapperfs {
 
 
 
-inline static void BuildLocationKey(size_t wrapper_id, wrapper_tag tag, location_key &key) {
+inline static void BuildLocationKey(size_t wrapper_id, location_key &key,
+                                    wrapper_tag tag = wrapper_tag::directory_relation) {
     key.tag = tag;
     key.wrapper_id = wrapper_id;
 }
 
-inline static void BuildRelationKey(size_t wrapper_id, wrapper_tag tag, 
-                                    std::string &dist, relation_key &key) {
+inline static void BuildRelationKey(size_t wrapper_id, std::string &dist, relation_key &key,
+                                    wrapper_tag tag = wrapper_tag::directory_relation) {
     key.tag = tag;
     key.wrapper_id = wrapper_id;
     key.distance = dist;
 }
 
-inline static void BuildEntryKey(size_t wrapper_id, wrapper_tag tag, entry_key &key)  {
+inline static void BuildEntryKey(size_t wrapper_id, entry_key &key,
+                                wrapper_tag tag = wrapper_tag::directory_relation)  {
     key.wrapper_id = wrapper_id;
     key.tag = tag;
 }
@@ -30,8 +32,6 @@ struct stat* GetMetadata(location_header* &rh) {
     return reinterpret_cast<struct stat*> (rh);
 }
 
-
-
 // wrapperfs的初始化过程
 // 初始化的关键参数有：max_ino, max_wrapper_id
 wrapperfs::wrapperfs(const std::string &data_dir, const std::string &db_dir) {
@@ -44,48 +44,30 @@ wrapperfs::wrapperfs(const std::string &data_dir, const std::string &db_dir) {
 }
 
 
-bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wrapper_id_in_search) {
-
-    int index = -1;
-    while (index != path_items.size() - 2) {
-        relation_key key;
-        BuildRelationKey(wrapper_id_in_search, directory_relation, path_items[index + 1], key);
-        
-        if (!wrapper_handle->get_relation(key, wrapper_id_in_search)) {
-            break;
-        } else {
-                index += 1;
-        }
-    }
-
-    if (index != path_items.size() - 2) {
-        if (ENABELD_LOG) {
-            spdlog::warn("path resolution failed");
-        }
-        return -ENOENT;
-    }
-}
-
  bool wrapperfs::WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance) {
+
+    if(distance == "/") {
+        next_wrapper_id = wrapper_id;
+        return true;
+    }
 
      // 首先判断是否能够找到目录
     relation_key key;
-    BuildRelationKey(wrapper_id, directory_relation, distance, key);
+    BuildRelationKey(wrapper_id, distance, key);
     // 如果能够找到关系，那么就是目录
-    if (wrapper_handle->get_relation(key, next_wrapper_id) ) {
+    if (wrapper_handle->get_relation(key.ToString(), next_wrapper_id) ) {
         return true;
     }
     return false;
  }
 
- bool wrapperfs::EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr) {
+ bool wrapperfs::EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr, entry_value* &eval) {
 
     entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
-    entry_value* eval = nullptr;
+    BuildEntryKey(wrapper_id, key);
 
     // 如果能够找到，那么就是文件
-     if (wrapper_handle->get_entries(key, eval)) {
+     if (wrapper_handle->get_entries(key.ToString(), eval)) {
         if(eval->find(primary_attr, ino))  {
             return true;
         }
@@ -93,63 +75,51 @@ bool wrapperfs::PathResolution(std::vector<std::string> &path_items, size_t &wra
     return false;
  }
 
- 
-bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename) {
-
-    size_t pc_id;
-    return PathLookup(path,wrapper_id, is_file, filename, pc_id);
-}
-
-// bug: 无法区分目录或文件是新目录，还是旧目录 (solved: 新目录或新文件将返回false)
-// pc_id: parent id or child id
-bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename, size_t &pc_id) {
-
-    std::string path_string = path;
-
-    if (path_string.empty() || path_string.front() != *PATH_DELIMITER) {
-        if (ENABELD_LOG) {
-            spdlog::warn("wrapper lookup failed");
+bool wrapperfs::ParentPathLookup(const char *path,
+                               size_t &wrapper_id,
+                               size_t &wrapper_id_in_search,
+                               const char* &lastdelimiter) {
+  const char* lpos = path;
+  const char* rpos;
+  std::string item;
+  wrapper_id_in_search = ROOT_WRAPPER_ID;
+  while ((rpos = strchr(lpos+1, PATH_DELIMITER)) != NULL) {
+    if (rpos - lpos > 0) {
+        relation_key key;
+        std::string filename = std::string(lpos+1, rpos-lpos-1);
+        BuildRelationKey(wrapper_id_in_search, filename, key);
+        if (!wrapper_handle->get_relation(key.ToString(), wrapper_id_in_search)) {
+            return false;
         }
-        return false;
     }
+    lpos = rpos;
+  }
 
-    std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
-    size_t wrapper_id_in_search = ROOT_WRAPPER_ID;
+  if(lpos == path) {
+    wrapper_id = ROOT_WRAPPER_ID;
+  }
 
-    // 解析根目录和包装器标签目录
-    if (path_items.size() < 2) {
-
-        // 为根目录
-        if (path_items.size() == 0) {
-            is_file = false;
-            wrapper_id = ROOT_WRAPPER_ID;
-            return true;
-        } 
-
+  lastdelimiter = lpos;
+  return true;
+}
+ 
+bool wrapperfs::PathLookup(const char* path, size_t &wrapper_id, std::string &filename) {
+    
+    const char* lpos;
+    size_t wrapper_in_search;
+    if(ParentPathLookup(path, wrapper_id, wrapper_in_search, lpos)) {
+        const char* rpos = strchr(lpos, '\0');
+        if (rpos != NULL && rpos-lpos > 1) {
+            // fixme: 获取最后一级的wrapper_id和文件名
+            wrapper_id = wrapper_in_search;
+            filename = std::string(lpos + 1, rpos-lpos-1);
+        } else {
+            filename = std::string(lpos, 1);
+        }
+        return true;
     } else {
-        PathResolution(path_items, wrapper_id_in_search);
-    }
-
-    filename = path_items[path_items.size() - 1];
-    size_t ino;
-
-    if (WrapperLookup(wrapper_id_in_search, wrapper_id, filename)) {
-        is_file = false;
-        pc_id = wrapper_id_in_search;
-        return true;
-    }
-
-    if (EntriesLookup(wrapper_id_in_search, ino, filename)) {
-        is_file = true;
-        wrapper_id = wrapper_id_in_search;
-        pc_id = ino;
-        return true;
-    }
-
-    wrapper_id = wrapper_id_in_search;
-    pc_id = wrapper_id_in_search;
-    return false;
-
+        return false;
+    }   
 }
 
 // 这是返回给
@@ -172,11 +142,11 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
 
     location_key key;
     std::string lval;
-    BuildLocationKey(wrapper_id, directory_relation, key);
+    BuildLocationKey(wrapper_id, key);
 
     location_header* lh;
 
-    if (!wrapper_handle->get_location(key, lh)) {
+    if (!wrapper_handle->get_location(key.ToString(), lh)) {
         if (ENABELD_LOG) {
             spdlog::warn("getattr: return failed");
         }
@@ -188,44 +158,41 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
 }
 
 
-// bug: 现有的PathLookup，无法获取新目录或新文件的元数据 (solved)
-// bug: 多层目录的访问还存在bug，问题出现在路径解析方法中 (solved: 创建目录时没有创建entries)
  int wrapperfs::Getattr(const char* path, struct stat* statbuf) {
 
-    bool is_file;
-    std::string filename;
     size_t wrapper_id;
-    size_t ino;
+    size_t pc_id;
+    std::string filename;
 
-    op_s.getattr += 1;
-    if(!PathLookup(path, wrapper_id, is_file, filename, ino)) {
-
-        op_s.getNULLStat += 1;
+    if(!PathLookup(path, wrapper_id, filename)) {
         if (ENABELD_LOG) {
-            spdlog::warn("open: cannot resolved the path!");
+            spdlog::warn("getattr error: no such file or directory");
         }
-         return -ENOENT;
+        return -ENOENT;
     }
 
-    if (is_file == true)   {
-        op_s.getFileStat += 1;
-        if(!GetFileStat(ino, statbuf)) {
-
-            if (ENABELD_LOG) {
-                spdlog::warn("getattr: get file stat error");
-            }
-            return -ENOENT;
-        }  
-    } else {
+    if(WrapperLookup(wrapper_id, pc_id, filename)) {
         op_s.getDirStat += 1;
-        if(!GetWrapperStat(wrapper_id, statbuf)) {
+        if(!GetWrapperStat(pc_id, statbuf)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
             }
             return -ENOENT; 
         } 
+        return 0;
     }
-    return 0;
+
+    entry_value* eval = nullptr;;
+    if(EntriesLookup(wrapper_id, pc_id, filename,eval)) {
+        if(!GetFileStat(pc_id, statbuf)) {
+            if (ENABELD_LOG) {
+                spdlog::warn("getattr: get file stat error");
+            }
+            return -ENOENT;
+        }
+        return 0;
+    }
+    return -ENOENT;
 }
 
 
@@ -265,24 +232,13 @@ void wrapperfs::InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev) 
 }
 
 
-
-// bug: 文件创建以后，居然显示not file，这里面肯定有逻辑错误 （solved）
-// bug: 获取不到父目录的entries (sovled: 因为传错了一个wrapper id)
-// bug: 经过测试，代码的问题就是在这些指针的转换过程中，不转换就不会错
 int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
 
-    std::string path_string = path;
-    size_t wrapper_id = ROOT_WRAPPER_ID;
-    std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
-    std::string filename = path_items[path_items.size() - 1];
+    size_t wrapper_id;
+    std::string filename;
+    PathLookup(path, wrapper_id, filename);
 
     op_s.mknod += 1;
-
-    if (path_items.size() > 1 ) {
-        PathResolution(path_items, wrapper_id);
-    }
-  
-    // 将文件元数据写进去
     max_ino = max_ino + 1;
     size_t ino = max_ino;
 
@@ -292,14 +248,12 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     rnode_handle->write_rnode(ino, header);
 
 
-
     // 还需要将文件名作为额外元数据写进去
     entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
+    BuildEntryKey(wrapper_id, key);
     entry_value* eval = nullptr;;
 
-    // bug: 这里的缓存会失效！（solved）
-    if (!wrapper_handle->get_entries(key, eval)) {
+    if (!wrapper_handle->get_entries(key.ToString(), eval)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot get name metadata.");
         }
@@ -307,20 +261,17 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     } 
 
     eval->push(filename, ino);
+    wrapper_handle->change_entries_stat(key.ToString());
     return 0;
 }
 
 // FIXME: 这里在创建目录stat的时候，采用的是wrapper_id作为inode id传进去的，不知道有没有问题 （没问题）
 int wrapperfs::Mkdir(const char* path, mode_t mode) {
 
-    size_t wrapper_id = ROOT_WRAPPER_ID;
-    std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
-    std::string filename = path_items[path_items.size() - 1];
-    op_s.mkdir += 1;
+    size_t wrapper_id;
+    std::string filename;
 
-    if (path_items.size() > 1 ) {
-        PathResolution(path_items, wrapper_id);
-    }
+    PathLookup(path, wrapper_id, filename);
     
     max_wrapper_id = max_wrapper_id + 1;
     size_t create_wrapper_id = max_wrapper_id;
@@ -329,45 +280,44 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     // FIXME: 需要加上S_IFDIR，以标记是目录
     InitStat(lheader->fstat, create_wrapper_id, mode | S_IFDIR, 0);
 
-
     // 首先创建location，将wrapper写进去
     location_key lkey;
-    BuildLocationKey(create_wrapper_id, directory_relation, lkey);
-    wrapper_handle->write_location(lkey, lheader);
+    BuildLocationKey(create_wrapper_id, lkey);
+    wrapper_handle->write_location(lkey.ToString(), lheader);
     
 
     // 还需要将目录关系写进去
     relation_key rkey;
-    BuildRelationKey(wrapper_id, directory_relation, filename, rkey);
-    wrapper_handle->cache_relation(rkey, create_wrapper_id);
+    BuildRelationKey(wrapper_id, filename, rkey);
+    wrapper_handle->write_relation(rkey.ToString(), create_wrapper_id);
              
     // 最后将空entries写进去
     entry_key ekey;
-    BuildEntryKey(create_wrapper_id, directory_relation, ekey);
+    BuildEntryKey(create_wrapper_id, ekey);
 
     entry_value* eval = new entry_value;
-    eval->is_dirty = true;
-    wrapper_handle->cache_entries(ekey, eval);
+    wrapper_handle->write_entries(ekey.ToString(), eval);
     return 0;
 }
 
 //
 int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
 
-    std::string filename;
+    size_t wrapper_id;
     size_t ino;
+    std::string filename;
     file_handle_t* fh = new file_handle_t;
-    op_s.open += 1;
 
-    size_t wrapper_id = ROOT_WRAPPER_ID;
-    std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
-    filename = path_items[path_items.size() - 1];
-
-    if (path_items.size() > 1 ) {
-        PathResolution(path_items, wrapper_id);
+    if(!PathLookup(path, wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("getattr error: no such file or directory");
+        }
+        return -ENOENT;
     }
 
-    if(!EntriesLookup(wrapper_id, ino, filename)) {
+    op_s.open += 1;
+    entry_value* eval = nullptr;;
+    if(!EntriesLookup(wrapper_id, ino, filename, eval)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot resolved the path!");
         }
@@ -375,7 +325,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
     }
 
     rnode_header* header;
-
     if(!rnode_handle->get_rnode(ino, header)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot get the stat");
@@ -391,7 +340,6 @@ int wrapperfs::Open(const char* path, struct fuse_file_info* file_info) {
 
     fh->fd = open(real_path.c_str(), file_info->flags | O_CREAT, fh->stat->st_mode);
     if(fh->fd < 0) {
-
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot open the real file");
         }
@@ -459,39 +407,37 @@ int wrapperfs::Write(const char* path, const char* buf, size_t size, off_t offse
 }
 
 int wrapperfs::Unlink(const char *path) {
-
-    std::string filename;
-    size_t ino;
+    
     bool is_remove = false;
-    size_t wrapper_id = ROOT_WRAPPER_ID;
+    size_t wrapper_id;
+    size_t ino;
+    std::string filename;
 
+    if(!PathLookup(path, wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("Mkdir error: no such parent file or directory");
+        }
+        return -ENOENT;
+    }
+   
     op_s.unlink += 1;
 
-    std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
-    filename = path_items[path_items.size() - 1];
-
-    if (path_items.size() > 1 ) {
-        PathResolution(path_items, wrapper_id);
-    }
-
-    entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
-
     entry_value* eval = nullptr;
-    if (!wrapper_handle->get_entries(key, eval)) {
+    if(!EntriesLookup(wrapper_id, ino, filename, eval)) {
         if (ENABELD_LOG) {
             spdlog::warn("unlink error, cannot get entries");
         }
         return -ENOENT;
-    }
-
-    if(eval->find(filename, ino)) {
+    } else {
+        entry_key ekey;
+        BuildEntryKey(wrapper_id, ekey);
+        eval->remove(filename);
+        wrapper_handle->change_entries_stat(ekey.ToString());
 
         rnode_handle->change_stat(ino, metadata_status::remove);
-        eval->remove(filename);
         is_remove = true;
     }
-    
+
     if (is_remove) {
         // 删除真实的文件
         std::string real_path = path;
@@ -534,38 +480,31 @@ int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
 
 int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
 
-    op_s.opendir += 1;
-    wrapper_handle_t* wh = new wrapper_handle_t;
-    wh->tag = directory_relation;
-
-
-    std::string path_string = path;
-    std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
-    size_t wrapper_id = ROOT_WRAPPER_ID;
+    size_t wrapper_id;
     std::string filename;
+    struct wrapper_handle_t* wh = new wrapper_handle_t;
+    wh->tag =wrapper_tag::directory_relation;
 
-
-    if (path_items.size() == 0) {
-        wh->wrapper_id = ROOT_WRAPPER_ID;
-    } else {
-        if (path_items.size() > 1) {
-            PathResolution(path_items, wrapper_id);
+    if(!PathLookup(path, wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("Mkdir error: no such parent file or directory");
         }
-
-        filename = path_items[path_items.size() - 1];
-        if (!WrapperLookup(wrapper_id, wh->wrapper_id, filename)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("opendir: cannot resolved the path!");
-            }
-            return -ENOENT;
-        } 
+        return -ENOENT;
     }
 
-    location_header* header;
-    location_key key;
-    BuildLocationKey(wh->wrapper_id, directory_relation, key);
+    op_s.opendir += 1;
+    if (!WrapperLookup(wrapper_id, wh->wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("opendir: cannot resolved the path!");
+        }
+        return -ENOENT;
+    } 
+    
+    struct location_header* header;
+    struct location_key key;
+    BuildLocationKey(wh->wrapper_id, key);
 
-    if(!wrapper_handle->get_location(key, header)) {
+    if(!wrapper_handle->get_location(key.ToString(), header)) {
         if (ENABELD_LOG) {
             spdlog::warn("opendir: cannot get the stat");
         }
@@ -577,10 +516,11 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     return 0;
 }
 
+
 // 
  int wrapperfs::Readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* file_info) {
 
-    wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
+    struct wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
     
     op_s.readdir += 1;
 
@@ -599,11 +539,11 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     }
 
     // 获取文件
-    entry_key key;
-    BuildEntryKey(wh->wrapper_id, directory_relation, key);
-    entry_value* eval = nullptr;
+    struct entry_key key;
+    BuildEntryKey(wh->wrapper_id, key);
+    struct entry_value* eval = nullptr;
 
-    if (!wrapper_handle->get_entries(key, eval)) {
+    if (!wrapper_handle->get_entries(key.ToString(), eval)) {
             if (ENABELD_LOG) {
                 spdlog::warn("readdir error, cannot find sub file entry!");
             }
@@ -625,50 +565,42 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
     }
 
     // 获取目录
-    relation_key rkey;
+    struct relation_key rkey;
     std::string nullstr = std::string("");
-    BuildRelationKey(wh->wrapper_id, directory_relation, nullstr, rkey);
-    ATTR_STR_LIST *wid2attr = wrapper_handle->get_relations(rkey);
-    for (auto &item : (*wid2attr)) {
-        if (filler(buf, item.first.c_str(), NULL, 0) < 0) {
-            if (ENABELD_LOG) {
-                spdlog::warn("readdir error, cannot filler directory name.");
-            }
+    BuildRelationKey(wh->wrapper_id, nullstr, rkey);
+
+    ATTR_STR_LIST list;
+    if(wrapper_handle->get_relations(rkey, list)) {
+        for (auto &item : list) {
+            std::vector<std::string> items = split_string(item.first, ":");
+            if (filler(buf, items[items.size() - 1].c_str(), NULL, 0) < 0) {
+                if (ENABELD_LOG) {
+                    spdlog::warn("readdir error, cannot filler directory name.");
+                }
                 return -ENOENT;
-        } else {
-            continue;
+            } 
         }
     }
+
     return 0;
 }
 
 // 删除目录之前，会不断调用unlink删除文件，因此只需要删除目录相关的东西就行
 int wrapperfs::RemoveDir(const char *path) {
 
-    std::string path_string = path;
-    std::vector<std::string> path_items = split_string(path_string, PATH_DELIMITER);
-    size_t wrapper_id_in_search = ROOT_WRAPPER_ID;
+    size_t wrapper_id;
+    size_t pc_id;
+    std::string filename;
 
-    op_s.rmdir += 1;
-
-    // 解析根目录和包装器标签目录
-    if (path_items.size() < 2) {
-
-        // 为根目录
-        if (path_items.size() == 0) {
-            if (ENABELD_LOG) {
-                spdlog::warn("rmdir: cannot rm root dir!");
-            }
-            return -ENOENT;
-        } 
-    } else {
-        PathResolution(path_items, wrapper_id_in_search);
+    if(!PathLookup(path, wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("getattr error: no such file or directory");
+        }
+        return -ENOENT;
     }
 
-    std::string filename = path_items[path_items.size() - 1];
-    size_t wrapper_id;
-
-    if (!WrapperLookup(wrapper_id_in_search, wrapper_id, filename)) {
+    op_s.rmdir += 1;
+    if (!WrapperLookup(wrapper_id, pc_id, filename)) {
 
         if (ENABELD_LOG) {
             spdlog::warn("rmdir: cannot resolved the path!");
@@ -678,43 +610,31 @@ int wrapperfs::RemoveDir(const char *path) {
     }
 
     // 删除relation
-    relation_key rkey;
-    BuildRelationKey(wrapper_id_in_search, directory_relation, filename, rkey);
-    if(!wrapper_handle->delete_relation(rkey))  {
-             
-        if (ENABELD_LOG) {
-            spdlog::warn("rmdir error: cannot delete relation!");
-        }
-        return -ENONET;
-    }
+    struct relation_key rkey;
+    BuildRelationKey(wrapper_id, filename, rkey);
+    wrapper_handle->change_relation_stat(rkey.ToString(), metadata_status::remove);
 
-    location_key lkey;
-    BuildLocationKey(wrapper_id, directory_relation, lkey);
-    wrapper_handle->change_stat(lkey, metadata_status::remove);
+    struct location_key lkey;
+    BuildLocationKey(pc_id, lkey);
+    wrapper_handle->change_stat(lkey.ToString(), metadata_status::remove);
   
     // 删除entries
-    entry_key key;
-    BuildEntryKey(wrapper_id, directory_relation, key);
-    if (!wrapper_handle->delete_entries(key)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("rmdir error: cannot delete entries!");
-            }
-            return -ENOENT;
-    }
+    struct entry_key key;
+    BuildEntryKey(pc_id, key);
+    wrapper_handle->change_entries_stat(key.ToString(), metadata_status::remove);
     return 0;
 }
 
 //
 int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
-    wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
+    struct wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
 
     op_s.releasedir += 1;
 
     // 释放句柄
     if (wh != NULL) {
         file_info->fh = -1;
-        wrapper_handle->flush();
         return 0;
     } else {
         if(ENABELD_LOG) {
@@ -737,21 +657,21 @@ int wrapperfs::Access(const char* path, int mask) {
 // bug: 文件的时间总是不对哈！(solved)
 int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
 
-  
-    rnode_header *header;
-    std::string filename;
+    struct rnode_header *header;
+    size_t wrapper_id;
     size_t ino;
-    op_s.utimens += 1;
+    std::string filename;
 
-    size_t wrapper_id = ROOT_WRAPPER_ID;
-    std::vector<std::string> path_items = split_string(path, PATH_DELIMITER);
-    filename = path_items[path_items.size() - 1];
-
-    if (path_items.size() > 1 ) {
-        PathResolution(path_items, wrapper_id);
+    if(!PathLookup(path, wrapper_id, filename)) {
+        if (ENABELD_LOG) {
+            spdlog::warn("getattr error: no such file or directory");
+        }
+        return -ENOENT;
     }
 
-    if(!EntriesLookup(wrapper_id, ino, filename)) {
+    op_s.utimens += 1;
+    entry_value* eval = nullptr;;
+    if(!EntriesLookup(wrapper_id, ino, filename, eval)) {
         if (ENABELD_LOG) {
             spdlog::warn("open: cannot resolved the path!");
         }
@@ -780,78 +700,82 @@ int wrapperfs::UpdateTimes(const char* path, const struct timespec tv[2]) {
 
 int wrapperfs::Chmod(const char *path, mode_t mode) {
 
-    bool is_file;
-    std::string filename;
     size_t wrapper_id;
-    size_t ino;
-   
-    op_s.chmod += 1;
-    if(!PathLookup(path, wrapper_id, is_file, filename)) {
+    size_t pc_id;
+    std::string filename;
 
+    if(!PathLookup(path, wrapper_id, filename)) {
         if (ENABELD_LOG) {
-            spdlog::warn("open: cannot resolved the path!");
+            spdlog::warn("getattr error: no such file or directory");
         }
-         return -ENOENT;
+        return -ENOENT;
     }
 
-    if (is_file == true)   {
-        rnode_header *header;
-        if(!rnode_handle->get_rnode(ino, header)) {
+    entry_value* eval = nullptr;;
+    if(EntriesLookup(wrapper_id, pc_id, filename, eval)) {
+        struct rnode_header *header;
+        if(!rnode_handle->get_rnode(pc_id, header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
             }
             return -ENOENT;
         }
         header->fstat.st_mode = mode;
-        rnode_handle->change_stat(ino);
-    } else {
-        location_key key;
-        BuildLocationKey(wrapper_id, directory_relation, key);
-        location_header* header;
-        if(wrapper_handle->get_location(key, header)) {
+        rnode_handle->change_stat(pc_id);
+        return 0;
+    }
+
+    if(WrapperLookup(wrapper_id, pc_id, filename)) {
+        struct location_key key;
+        BuildLocationKey(pc_id, key);
+        struct location_header* header;
+        if(wrapper_handle->get_location(key.ToString(), header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
             }
             return -ENOENT; 
         } 
         header->fstat.st_mode = mode;
-        wrapper_handle->change_stat(key);
+        wrapper_handle->change_stat(key.ToString());
+        return 0;
     }
-    return 0;
+    return -ENOENT;
 }
 
 int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
 
-    bool is_file;
-    std::string filename;
     size_t wrapper_id;
-    size_t ino;
-    op_s.chown += 1;
+    size_t pc_id;
+    std::string filename;
 
-    if(!PathLookup(path, wrapper_id, is_file, filename)) {
-
+    if(!PathLookup(path, wrapper_id, filename)) {
         if (ENABELD_LOG) {
-            spdlog::warn("open: cannot resolved the path!");
+            spdlog::warn("getattr error: no such file or directory");
         }
-         return -ENOENT;
+        return -ENOENT;
     }
 
-    if (is_file == true)   {
-        rnode_header *header;
-        if(!rnode_handle->get_rnode(ino, header)) {
+    op_s.chown += 1;
+    entry_value* eval = nullptr;;
+    if(EntriesLookup(wrapper_id, pc_id, filename, eval)) {
+        struct rnode_header *header;
+        if(!rnode_handle->get_rnode(pc_id, header)) {
                 if (ENABELD_LOG) {
                 spdlog::warn("chown: get file stat error");
                 }
         } else {
             header->fstat.st_gid = gid;
             header->fstat.st_uid = uid;
-            rnode_handle->change_stat(ino);
+            rnode_handle->change_stat(pc_id);
+            return 0;
         }
-    } else {
-        location_key key;
-        BuildLocationKey(wrapper_id, directory_relation, key);
-        location_header* header;
-        if(wrapper_handle->get_location(key, header)) {
+    }
+
+    if(WrapperLookup(wrapper_id, pc_id, filename)) {
+        struct location_key key;
+        BuildLocationKey(pc_id, key);
+        struct location_header* header;
+        if(wrapper_handle->get_location(key.ToString(), header)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get wrapper stat error");
             }
@@ -859,95 +783,79 @@ int wrapperfs::Chown(const char *path, uid_t uid, gid_t gid) {
         } 
         header->fstat.st_gid = gid;
         header->fstat.st_uid = uid;
-        wrapper_handle->change_stat(key);
+        wrapper_handle->change_stat(key.ToString());
+        return 0;
     }
-    return 0;
 
+    return -ENOENT;
 }
 
 int wrapperfs::Rename(const char* source, const char* dest) {
 
     // 还是需要分文件还是目录
-    bool is_file;
     std::string source_filename, dest_filename;
     size_t source_wrapper_id, dest_wrapper_id;
     size_t source_ino;
-    size_t source_pc_id, dest_pc_id;
+    struct entry_value *eval;
+
     op_s.rename += 1;
-
-    if(!PathLookup(source, source_wrapper_id, is_file, source_filename, source_pc_id)) {
-
+    if(!PathLookup(source, source_wrapper_id, source_filename)) {
         if (ENABELD_LOG) {
-            spdlog::warn("rename: cannot resolved the source path!");
+            spdlog::warn("getattr error: no such file or directory");
         }
-         return -ENOENT;
+        return -ENOENT;
     }
-
-    PathLookup(dest, dest_wrapper_id, is_file, dest_filename, dest_pc_id);
-
-    if(is_file) {
-
-        // step1: 删除source的entries
-        entry_key source_key;
-        BuildEntryKey(source_wrapper_id, directory_relation, source_key);
-        entry_value *eval = nullptr;
+    PathLookup(dest, dest_wrapper_id, dest_filename);
         
-        if (!wrapper_handle->get_entries(source_key, eval)) {
-            if (ENABELD_LOG) {
-                spdlog::warn("rename error, cannot get source file entries");
-            }
-            return -ENOENT;
-        } 
-
-        if(eval->find(source_filename, source_ino)) {
-            eval->remove(source_filename);
-        }
-
+    if(EntriesLookup(source_wrapper_id, source_ino, source_filename, eval)) {
+        
+        // step1: 删除source的entries
+        entry_key ekey;
+        BuildEntryKey(source_wrapper_id, ekey);
+        eval->remove(source_filename);
+        wrapper_handle->change_relation_stat(ekey.ToString());
+ 
         // step2: 添加dest的entries
-        entry_key dest_key;
-        BuildEntryKey(dest_wrapper_id, directory_relation, dest_key);
+        struct entry_key dest_key;
+        BuildEntryKey(dest_wrapper_id, dest_key);
         entry_value *dest_eval = nullptr;
                                
-        if (!wrapper_handle->get_entries(dest_key, dest_eval)) {
+        if (!wrapper_handle->get_entries(dest_key.ToString(), dest_eval)) {
             if (ENABELD_LOG) {
                 spdlog::warn("rename error: dir isn't exist, cannot mv file into this dir!");
             }
             return -ENONET;
         } 
-
         dest_eval->push(dest_filename, source_ino);
+        wrapper_handle->change_entries_stat(dest_key.ToString());
+
         return 0;
+
     } else {
 
         // step1: 删除source的relation
-        relation_key key;
-        BuildRelationKey(source_pc_id, directory_relation, source_filename, key);
-
-        if(!wrapper_handle->delete_relation(key))  {
-             
-            if (ENABELD_LOG) {
-                spdlog::warn("rename error: cannot delete source relation!");
-            }
-            return -ENONET;
-        }
+        struct relation_key key;
+        size_t pc_id;
+        BuildRelationKey(source_wrapper_id, source_filename, key);
+        wrapper_handle->get_relation(key.ToString(), pc_id);
+        wrapper_handle->change_relation_stat(key.ToString(), metadata_status::remove);
 
         // step2: 添加dest的relation
-        BuildRelationKey(dest_pc_id, directory_relation, dest_filename, key);
-        wrapper_handle->cache_relation(key, source_wrapper_id);
+        BuildRelationKey(dest_wrapper_id, dest_filename, key);
+        wrapper_handle->write_relation(key.ToString(), pc_id);
         return 0;
     }
-
  }
 
- void wrapperfs::Destroy(void *data) {
+void wrapperfs::Destroy(void *data) {
 
     if (STATISTICS_LOG) {
         spdlog::info("IO statics {}", io_s.debug());
         spdlog::info("operation statics {}", op_s.debug());
     }
 
-    wrapper_handle->flush();
- }
+    wrapper_handle->sync();
+}
 
 void wrapperfs::GetFilePath(size_t ino, std::string &path) {
     std::stringstream ss;

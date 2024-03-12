@@ -31,14 +31,14 @@ bool close_file(int &fd) {
 
 std::string combine_path(const std::string &base_path, const std::string &sub_path) {
     std::string new_sub_path = sub_path;
-    if (!sub_path.empty() && sub_path.front() == *PATH_DELIMITER) {
+    if (!sub_path.empty() && sub_path.front() == PATH_DELIMITER) {
         if (sub_path.size() > 1) {
             new_sub_path = sub_path.substr(1);
         } else {
             new_sub_path.clear();
         }
     }
-    if (base_path.empty() || base_path.back() == *PATH_DELIMITER) {
+    if (base_path.empty() || base_path.back() == PATH_DELIMITER) {
         return base_path + new_sub_path;
     } else {
         return base_path + PATH_DELIMITER + new_sub_path;

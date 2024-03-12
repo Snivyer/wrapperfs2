@@ -44,17 +44,19 @@ private:
     LevelDBAdaptor* adaptor_;
     RnodeHandle* rnode_handle;
     WrapperHandle* wrapper_handle;
-
-
+    bool ParentPathLookup(const char* path, size_t &wrapper_id, size_t &wrapper_in_search, const char* &lastdelimiter);
+    inline bool PathLookup(const char* path, size_t &wrapper_id, std::string &filename);
     void GetFilePath(size_t ino, std::string &path);
-    bool PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename);
-    bool PathLookup(const char* path, size_t &wrapper_id, bool &is_file, std::string &filename, size_t &pc_id);
-    bool PathResolution(std::vector<std::string> &path_items, size_t &wrapper_id_in_search);
     bool WrapperLookup(size_t &wrapper_id, size_t &next_wrapper_id, std::string &distance);
-    bool EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr);
+    bool EntriesLookup(size_t &wrapper_id, size_t &ino, std::string &primary_attr, entry_value* &eval);
     bool GetFileStat(size_t &ino, struct stat* stat);
     bool GetWrapperStat(size_t wrapper_id, struct stat *stat);
     void InitStat(struct stat &stat, size_t ino, mode_t mode, dev_t dev);
+
+
+
+    
+    
 
 
 

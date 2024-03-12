@@ -39,17 +39,15 @@ struct entry_key {
 struct entry_value {
     size_t size;
     char* entry;
-    bool is_dirty;
 
     entry_value(): size(0), entry(nullptr) {
-        is_dirty = false;
     }
 
     entry_value(std::string &val) {
         size = val.size();
         entry = new char[size];
         memcpy(entry, val.data(), size);
-        is_dirty = false;
+
     }
 
     ~entry_value() {
@@ -77,7 +75,6 @@ struct entry_value {
         memcpy(new_entry + size + str.size() + 1, &ino, sizeof(size_t));
         entry = new_entry;
         size = new_size;
-        is_dirty = true;
         return true;
     }
 
@@ -123,7 +120,6 @@ struct entry_value {
         size_t skip = entry_back - entry; 
         memcpy(entry_back, entry_back + start, size - start - skip);
         size -= start;
-        is_dirty = true;
         return true;
     }
 
@@ -238,48 +234,60 @@ struct location_buff_entry {
     metadata_status stat;
 };
 
+struct entries_buff_entry {
+    entry_value* eval;
+    metadata_status stat;
+};
+
+struct relation_buff_entry {
+    size_t next_wrapper_id;
+    metadata_status stat;
+};
+
 class WrapperHandle {
 
 private:
     LevelDBAdaptor* adaptor;
-    std::unordered_map<std::string, entry_value*> entries_cache;
-    std::unordered_map<std::string, size_t> relation_cache;
-    std::unordered_map<std::string, size_t> relation_read_only_cache;
-
-    std::map<std::string, location_buff_entry> location_buff;
+    std::unordered_map<std::string, entries_buff_entry> entries_buff;
+    std::unordered_map<std::string, relation_buff_entry> relation_buff;
+    std::unordered_map<std::string, location_buff_entry> location_buff;
 
 
-    bool put_entries(std::string key, std::string &eval);
+    bool put_entries(std::string key);
     bool put_relation(std::string key, size_t &next_wrapper_id);
-    bool get_range_relations(relation_key &key, ATTR_STR_LIST* &wid2attr);
+    bool put_location(std::string key);
+    bool get_range_relations(relation_key &key, ATTR_STR_LIST &wid2attr);
 
-    bool put_location(location_key &key);
-    bool delete_location(location_key &key);
+    bool delete_location(std::string key);
+    bool delete_entries(std::string key);
+    bool delete_relation(std::string key);
 
- 
+  
+
 
 
 public:
     WrapperHandle(LevelDBAdaptor* adaptor);
     ~WrapperHandle();
 
-    void cache_entries(entry_key &key, entry_value* &eval);
-    bool get_entries(entry_key &key, entry_value* &eval);
-    bool delete_entries(entry_key &key);
+    void write_entries(std::string key, entry_value* &eval, metadata_status stat = metadata_status::write);
+    void change_entries_stat(std::string key, metadata_status state = metadata_status::write);
+    bool get_entries(std::string key, entry_value* &eval);
+    bool sync_entries(std::string key);
 
-    void cache_relation(relation_key &key, size_t &next_wrapper_id);
-    bool get_relation(relation_key &key, size_t &next_wrapper_id);
-    bool delete_relation(relation_key &key);
-    ATTR_STR_LIST* get_relations(relation_key &key);
+
+    void write_relation(std::string key, size_t &next_wrapper_id, metadata_status stat = metadata_status::write);
+    void change_relation_stat(std::string key, metadata_status state = metadata_status::write);
+    bool get_relation(std::string key, size_t &next_wrapper_id);
+    bool get_relations(relation_key &key, ATTR_STR_LIST &list);
+    bool sync_relation(std::string key);
+
     
-    bool get_location(location_key &key, struct location_header* &lh);
-    void write_location(location_key &key, struct location_header* &lh, metadata_status state = metadata_status::write);
-    void change_stat(location_key &key, metadata_status state = metadata_status::write);
-
-    
-    bool sync_location(location_key &key);
-    void flush();
-
+    bool get_location(std::string key, struct location_header* &lh);
+    void write_location(std::string key, struct location_header* &lh, metadata_status state = metadata_status::write);
+    void change_stat(std::string key, metadata_status state = metadata_status::write);
+    bool sync_location(std::string key);
+    bool sync();
 
 };
 

@@ -28,17 +28,16 @@ int main(int argc, char *argv[]) {
     lheader->fstat.st_ino = wrapperfs::ROOT_WRAPPER_ID;
     std::string lval = std::string(reinterpret_cast<const char*>(lheader), sizeof(wrapperfs::location_header));
 
-    handle->write_location(key, lheader);
-    handle->sync_location(key);
+    handle->write_location(key.ToString(), lheader);
+    handle->sync_location(key.ToString());
     
     wrapperfs::entry_key ekey;
     ekey.wrapper_id = wrapperfs::ROOT_WRAPPER_ID;
     ekey.tag = wrapperfs::directory_relation; 
 
     wrapperfs::entry_value* eval = new wrapperfs::entry_value;
-    eval->is_dirty = true;
-    handle->cache_entries(ekey, eval);
-    handle->flush();
+    handle->write_entries(ekey.ToString(), eval);
+    handle->sync_entries(ekey.ToString());
     
     spdlog::debug("wrapperfs mkfs success!");
     return 0;
