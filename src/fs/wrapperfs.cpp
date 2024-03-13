@@ -854,7 +854,17 @@ void wrapperfs::Destroy(void *data) {
         spdlog::info("operation statics {}", op_s.debug());
     }
 
-    wrapper_handle->sync();
+    if(rnode_handle) {
+        delete rnode_handle;
+    }
+
+    if(wrapper_handle) {
+        delete wrapper_handle;
+    }
+
+    if(adaptor_) {
+        delete adaptor_;
+    }
 }
 
 void wrapperfs::GetFilePath(size_t ino, std::string &path) {

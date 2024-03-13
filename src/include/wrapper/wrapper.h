@@ -5,6 +5,7 @@
 #include <sstream>
 #include <utility>
 #include <sys/stat.h>
+#include <future>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
 #include <map>
@@ -51,7 +52,7 @@ struct entry_value {
     }
 
     ~entry_value() {
-        if(entry != nullptr) {
+        if(entry != nullptr && size != 0) {
             delete entry;
             size = 0;
         }
@@ -274,6 +275,7 @@ public:
     void change_entries_stat(std::string key, metadata_status state = metadata_status::write);
     bool get_entries(std::string key, entry_value* &eval);
     bool sync_entries(std::string key);
+    bool sync_entrys();
 
 
     void write_relation(std::string key, size_t &next_wrapper_id, metadata_status stat = metadata_status::write);
@@ -281,12 +283,14 @@ public:
     bool get_relation(std::string key, size_t &next_wrapper_id);
     bool get_relations(relation_key &key, ATTR_STR_LIST &list);
     bool sync_relation(std::string key);
-
+    bool sync_relations();
     
     bool get_location(std::string key, struct location_header* &lh);
     void write_location(std::string key, struct location_header* &lh, metadata_status state = metadata_status::write);
     void change_stat(std::string key, metadata_status state = metadata_status::write);
     bool sync_location(std::string key);
+    bool sync_locations();
+
     bool sync();
 
 };

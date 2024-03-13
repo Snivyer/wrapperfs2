@@ -13,11 +13,11 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 }
 
 WrapperHandle::~WrapperHandle() {
-    this->adaptor = nullptr;
     sync();
     entries_buff.clear();
     location_buff.clear();
     relation_buff.clear();
+    this->adaptor = nullptr;
 }
 
 void WrapperHandle::write_entries(std::string key, entry_value* &eval, metadata_status state) {
@@ -89,6 +89,19 @@ bool WrapperHandle::delete_entries(std::string key) {
     }
     return true;
 }
+
+bool WrapperHandle::sync_entrys() {
+    std::unordered_map<std::string, entries_buff_entry>::iterator it, its;
+    for(it = entries_buff.begin(); it != entries_buff.end();) {
+        its = it;
+        its ++;
+        sync_entries(it->first);
+        it = its;
+    }
+    return true;
+}
+
+
 
 bool WrapperHandle::sync_entries(std::string key) {
 
@@ -192,17 +205,25 @@ bool WrapperHandle::get_range_relations(relation_key &key,  ATTR_STR_LIST &wid2a
 bool WrapperHandle::get_relations(relation_key &key, ATTR_STR_LIST &list) {
 
     // 首先第一步，先落盘
-    for(auto item: relation_buff) {
-        if(item.second.stat > metadata_status::read) {
-            sync_relation(item.first);
-        }
-    }
+    sync_relations();
 
     if(get_range_relations(key, list)) {
         return true;
     } 
     return false;
  }
+
+bool WrapperHandle::sync_relations() {
+
+    std::unordered_map<std::string, relation_buff_entry>::iterator it, its;
+    for(it = relation_buff.begin(); it != relation_buff.end();) {
+        its = it;
+        its ++;
+        sync_relation(it->first);
+        it = its;
+    }
+    return true;
+}
 
 
 bool WrapperHandle::sync_relation(std::string key) {
@@ -216,6 +237,7 @@ bool WrapperHandle::sync_relation(std::string key) {
     }
     return true;
 }
+
 
 
 void WrapperHandle::change_stat(std::string key, metadata_status state) {
@@ -284,6 +306,18 @@ bool WrapperHandle::delete_location(std::string key) {
     return true;
 }
 
+
+bool WrapperHandle::sync_locations() {
+    std::unordered_map<std::string, location_buff_entry>::iterator it, its;
+    for(it = location_buff.begin(); it != location_buff.end();) {
+        its = it;
+        its ++;
+        sync_location(it->first);
+        it = its;
+    }
+    return true;
+}
+
 bool WrapperHandle::sync_location(std::string key) {
 
     if(location_buff[key].stat == metadata_status::write) {
@@ -295,27 +329,17 @@ bool WrapperHandle::sync_location(std::string key) {
     }
     return true;
 }
-
+  
 bool WrapperHandle::sync() {
 
-    for(auto item: relation_buff) {
-        if(item.second.stat > metadata_status::read) {
-            sync_relation(item.first);
-        }
-    }
+    sync_entrys();
+    std::future<bool> ret1 = std::async(std::launch::async, &WrapperHandle::sync_relations, this);
+    std::future<bool> ret2 = std::async(std::launch::async, &WrapperHandle::sync_locations, this);
 
-    for(auto item: entries_buff) {
-        if(item.second.stat > metadata_status::read) {
-            sync_entries(item.first);
-        }
+    if(ret1.get() == true & ret2.get() == true) {
+        return true;
     }
-
-    for(auto item: location_buff) {
-        if(item.second.stat > metadata_status::read) {
-            sync_location(item.first);
-        }
-    }
-
+    return false;
 }
 
 

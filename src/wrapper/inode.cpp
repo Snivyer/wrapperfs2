@@ -18,6 +18,7 @@ RnodeHandle::RnodeHandle(LevelDBAdaptor* adaptor) {
 }
 
 RnodeHandle::~RnodeHandle() {
+    sync();
     buff.clear();
     this->adaptor = nullptr;
 }
@@ -101,6 +102,16 @@ bool RnodeHandle::delete_rnode(size_t ino) {
         return false;
     }
     return true;
+}
+
+bool RnodeHandle::sync() {
+    std::unordered_map<size_t, buff_entry>::iterator it, its;
+    for(it = buff.begin(); it != buff.end();) {
+        its = it;
+        its ++;
+        sync(it->first);
+        it = its;
+    }
 }
 
 bool RnodeHandle::sync(size_t ino) {
