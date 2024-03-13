@@ -464,11 +464,12 @@ int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
 
     // 将更新好的数据写回DB
     rnode_handle->change_stat(fh->ino);
-  //  rnode_handle->sync(fh->ino);
-
-    if(fh->fd != -1 ) {
+    //rnode_handle->sync(fh->ino);
+  
+    if(fh->fd != -1) {
         close(fh->fd);
         file_info->fh = -1;
+        delete fh;
         return 0;
     } else {
         if (ENABELD_LOG) {
@@ -521,7 +522,6 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
  int wrapperfs::Readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* file_info) {
 
     struct wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
-    
     op_s.readdir += 1;
 
     if (filler(buf, ".", NULL, 0) < 0) {
@@ -581,7 +581,6 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
             } 
         }
     }
-
     return 0;
 }
 
@@ -629,12 +628,20 @@ int wrapperfs::RemoveDir(const char *path) {
 int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
 
     struct wrapper_handle_t* wh = (wrapper_handle_t*) file_info->fh;
-
     op_s.releasedir += 1;
 
     // 释放句柄
     if (wh != NULL) {
         file_info->fh = -1;
+        location_key lkey;
+        entry_key ekey;
+        BuildEntryKey(wh->wrapper_id, ekey);
+        BuildLocationKey(wh->wrapper_id, lkey);
+
+        // 数据落盘
+        wrapper_handle->sync_entries(ekey.ToString());
+        wrapper_handle->sync_location(lkey.ToString());
+        delete wh;
         return 0;
     } else {
         if(ENABELD_LOG) {
