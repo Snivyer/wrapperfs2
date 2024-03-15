@@ -18,13 +18,22 @@ RnodeHandle::RnodeHandle(LevelDBAdaptor* adaptor) {
 }
 
 RnodeHandle::~RnodeHandle() {
-    sync();
     buff.clear();
     this->adaptor = nullptr;
 }
 
-void RnodeHandle::change_stat(size_t ino, metadata_status state) {
-    buff[ino].stat = state;
+bool RnodeHandle::change_stat(size_t ino, metadata_status state) {
+
+    // create cannot tend to remove directly
+    if(state == metadata_status::remove & buff[ino].stat == metadata_status::create) {
+         if(buff[ino].rh) {
+            delete buff[ino].rh;
+        }
+        buff.erase(ino);
+    } else {
+        buff[ino].stat = state;
+    }
+
 }
 
 void RnodeHandle::write_rnode(size_t ino, struct rnode_header* &rh, metadata_status state) {
@@ -104,19 +113,21 @@ bool RnodeHandle::delete_rnode(size_t ino) {
     return true;
 }
 
-bool RnodeHandle::sync() {
+bool RnodeHandle::syncs() {
     std::unordered_map<size_t, buff_entry>::iterator it, its;
     for(it = buff.begin(); it != buff.end();) {
         its = it;
         its ++;
-        sync(it->first);
+        if (it->second.stat != metadata_status::read) {
+            sync(it->first);
+        }
         it = its;
     }
 }
 
 bool RnodeHandle::sync(size_t ino) {
 
-    if(buff[ino].stat == metadata_status::write) {
+    if(buff[ino].stat >= metadata_status::create) {
         return put_rnode(ino);
     }
 

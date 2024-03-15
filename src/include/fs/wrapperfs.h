@@ -4,7 +4,8 @@
 #include <fuse.h>
 #include <sstream>
 #include <spdlog/spdlog.h>
-
+#include <unordered_set>
+#include <future>
 #include "wrapper/inode.h"
 #include "wrapper/wrapper.h"
 #include "utils/hash_routine.h"

@@ -68,9 +68,15 @@ wrapperfs::wrapperfs(const std::string &data_dir, const std::string &db_dir) {
 
     // 如果能够找到，那么就是文件
      if (wrapper_handle->get_entries(key.ToString(), eval)) {
-        if(eval->find(primary_attr, ino))  {
+        auto ret = eval->vmap->find(primary_attr);
+        if(ret != eval->vmap->end()) {
+            ino = ret->second;
             return true;
         }
+
+        // if(eval->find(primary_attr, ino))  {
+        //     return true;
+        // }
     } 
     return false;
  }
@@ -183,7 +189,7 @@ bool wrapperfs::GetWrapperStat(size_t wrapper_id, struct stat *stat) {
     }
 
     entry_value* eval = nullptr;;
-    if(EntriesLookup(wrapper_id, pc_id, filename,eval)) {
+    if(EntriesLookup(wrapper_id, pc_id, filename, eval)) {
         if(!GetFileStat(pc_id, statbuf)) {
             if (ENABELD_LOG) {
                 spdlog::warn("getattr: get file stat error");
@@ -245,22 +251,21 @@ int wrapperfs::Mknod(const char* path, mode_t mode, dev_t dev) {
     // FIXME: mode需要加入S_IFREG，以标注是文件
     rnode_header* header = new rnode_header;
     InitStat(header->fstat, ino, mode | S_IFREG, dev);
-    rnode_handle->write_rnode(ino, header);
+    rnode_handle->write_rnode(ino, header, metadata_status::create);
 
 
     // 还需要将文件名作为额外元数据写进去
     entry_key key;
     BuildEntryKey(wrapper_id, key);
-    entry_value* eval = nullptr;;
-
+    entry_value* eval = nullptr;
     if (!wrapper_handle->get_entries(key.ToString(), eval)) {
         if (ENABELD_LOG) {
             spdlog::warn("mknod error: cannot get name metadata.");
         }
         return -ENONET;
     } 
-
-    eval->push(filename, ino);
+    eval->vmap->insert({filename, ino});
+    //eval->push(filename, ino);
     wrapper_handle->change_entries_stat(key.ToString());
     return 0;
 }
@@ -283,20 +288,20 @@ int wrapperfs::Mkdir(const char* path, mode_t mode) {
     // 首先创建location，将wrapper写进去
     location_key lkey;
     BuildLocationKey(create_wrapper_id, lkey);
-    wrapper_handle->write_location(lkey.ToString(), lheader);
+    wrapper_handle->write_location(lkey.ToString(), lheader, metadata_status::create);
     
 
     // 还需要将目录关系写进去
     relation_key rkey;
     BuildRelationKey(wrapper_id, filename, rkey);
-    wrapper_handle->write_relation(rkey.ToString(), create_wrapper_id);
+    wrapper_handle->write_relation(rkey.ToString(), create_wrapper_id, metadata_status::create);
              
     // 最后将空entries写进去
     entry_key ekey;
     BuildEntryKey(create_wrapper_id, ekey);
 
     entry_value* eval = new entry_value;
-    wrapper_handle->write_entries(ekey.ToString(), eval);
+    wrapper_handle->write_entries(ekey.ToString(), eval, metadata_status::create);
     return 0;
 }
 
@@ -431,10 +436,15 @@ int wrapperfs::Unlink(const char *path) {
     } else {
         entry_key ekey;
         BuildEntryKey(wrapper_id, ekey);
-        eval->remove(filename);
+
+        eval->vmap->erase(filename);
+       // eval->remove(filename);
         wrapper_handle->change_entries_stat(ekey.ToString());
 
-        rnode_handle->change_stat(ino, metadata_status::remove);
+        if (rnode_handle->change_stat(ino, metadata_status::remove)) {
+            //std::async(std::launch::async, &RnodeHandle::sync, this->rnode_handle, ino);
+        }
+
         is_remove = true;
     }
 
@@ -464,7 +474,6 @@ int wrapperfs::Release(const char* path, struct fuse_file_info* file_info) {
 
     // 将更新好的数据写回DB
     rnode_handle->change_stat(fh->ino);
-    //rnode_handle->sync(fh->ino);
   
     if(fh->fd != -1) {
         close(fh->fd);
@@ -549,11 +558,8 @@ int wrapperfs::Opendir(const char* path, struct fuse_file_info* file_info) {
             }
             return -ENOENT;
     } else {
-        std::vector<std::string> list;
-        eval->ToList(list);
-        
-        for (auto item : list) {
-            if (filler(buf, item.c_str(), NULL, 0) < 0) {
+        for (auto item : *(eval->vmap)) {
+            if (filler(buf, item.first.c_str(), NULL, 0) < 0) {
                 if (ENABELD_LOG) {
                     spdlog::warn("readdir error, cannot filler filename");
                 }
@@ -612,15 +618,23 @@ int wrapperfs::RemoveDir(const char *path) {
     struct relation_key rkey;
     BuildRelationKey(wrapper_id, filename, rkey);
     wrapper_handle->change_relation_stat(rkey.ToString(), metadata_status::remove);
+        //std::async(std::launch::async, &WrapperHandle::sync_relation, this->wrapper_handle, rkey.ToString());
+        //wrapper_handle->sync_relation(rkey);
+
 
     struct location_key lkey;
     BuildLocationKey(pc_id, lkey);
-    wrapper_handle->change_stat(lkey.ToString(), metadata_status::remove);
+    if(wrapper_handle->change_stat(lkey.ToString(), metadata_status::remove)) {
+        //std::async(std::launch::async, &WrapperHandle::sync_location, this->wrapper_handle, lkey.ToString());
+    }
+
   
     // 删除entries
     struct entry_key key;
     BuildEntryKey(pc_id, key);
-    wrapper_handle->change_entries_stat(key.ToString(), metadata_status::remove);
+    if(wrapper_handle->change_entries_stat(key.ToString(), metadata_status::remove)) {
+        //std::async(std::launch::async, &WrapperHandle::sync_entries, this->wrapper_handle, key.ToString());
+    }
     return 0;
 }
 
@@ -637,10 +651,6 @@ int wrapperfs::Releasedir(const char* path, struct fuse_file_info* file_info) {
         entry_key ekey;
         BuildEntryKey(wh->wrapper_id, ekey);
         BuildLocationKey(wh->wrapper_id, lkey);
-
-        // 数据落盘
-        wrapper_handle->sync_entries(ekey.ToString());
-        wrapper_handle->sync_location(lkey.ToString());
         delete wh;
         return 0;
     } else {
@@ -819,7 +829,8 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         // step1: 删除source的entries
         entry_key ekey;
         BuildEntryKey(source_wrapper_id, ekey);
-        eval->remove(source_filename);
+        eval->vmap->erase(source_filename);
+        //eval->remove(source_filename);
         wrapper_handle->change_relation_stat(ekey.ToString());
  
         // step2: 添加dest的entries
@@ -833,7 +844,9 @@ int wrapperfs::Rename(const char* source, const char* dest) {
             }
             return -ENONET;
         } 
-        dest_eval->push(dest_filename, source_ino);
+
+        dest_eval->vmap->insert({dest_filename, source_ino});
+        //dest_eval->push(dest_filename, source_ino);
         wrapper_handle->change_entries_stat(dest_key.ToString());
 
         return 0;
@@ -846,7 +859,10 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         BuildRelationKey(source_wrapper_id, source_filename, key);
         wrapper_handle->get_relation(key.ToString(), pc_id);
         wrapper_handle->change_relation_stat(key.ToString(), metadata_status::remove);
-
+            //std::async(std::launch::async, &WrapperHandle::sync_relation, this->wrapper_handle, key.ToString());
+            //wrapper_handle->sync_relation(key.ToString());
+        
+   
         // step2: 添加dest的relation
         BuildRelationKey(dest_wrapper_id, dest_filename, key);
         wrapper_handle->write_relation(key.ToString(), pc_id);
@@ -861,14 +877,17 @@ void wrapperfs::Destroy(void *data) {
         spdlog::info("operation statics {}", op_s.debug());
     }
 
-    if(rnode_handle) {
-        delete rnode_handle;
-    }
+    std::future<bool> ret = std::async(std::launch::async, &RnodeHandle::syncs, this->rnode_handle);
+    wrapper_handle->sync();
 
     if(wrapper_handle) {
         delete wrapper_handle;
     }
-
+    
+    if(rnode_handle && ret.get() == true) {
+        delete rnode_handle;
+    }
+        
     if(adaptor_) {
         delete adaptor_;
     }

@@ -15,8 +15,9 @@ namespace wrapperfs {
 
 enum metadata_status {
     read,
-    write,
     remove,
+    create,
+    write,
 };
 
 
@@ -55,9 +56,9 @@ public:
 
     bool get_rnode(size_t ino, struct rnode_header* &rh);
     void write_rnode(size_t ino, struct rnode_header* &rh, metadata_status state = metadata_status::write);
-    void change_stat(size_t ino, metadata_status state = metadata_status::write);
+    bool change_stat(size_t ino, metadata_status state = metadata_status::write);
     bool sync(size_t ino);
-    bool sync();
+    bool syncs();
 
 
 };

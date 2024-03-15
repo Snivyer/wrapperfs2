@@ -13,7 +13,6 @@ WrapperHandle::WrapperHandle(LevelDBAdaptor* adaptor) {
 }
 
 WrapperHandle::~WrapperHandle() {
-    sync();
     entries_buff.clear();
     location_buff.clear();
     relation_buff.clear();
@@ -25,8 +24,20 @@ void WrapperHandle::write_entries(std::string key, entry_value* &eval, metadata_
     entries_buff[key].stat = state;
 }
 
-void WrapperHandle::change_entries_stat(std::string key, metadata_status state) {
-    entries_buff[key].stat = state;
+bool WrapperHandle::change_entries_stat(std::string key, metadata_status state) {
+    
+    if(state == metadata_status::remove & entries_buff[key].stat == metadata_status::create) {
+        if(entries_buff[key].eval) {
+            delete entries_buff[key].eval->entry;
+            delete entries_buff[key].eval;
+        }
+        entries_buff.erase(key);
+        return false;
+
+    } else {
+        entries_buff[key].stat = state;
+        return true;
+    }
 }
 
 
@@ -95,7 +106,9 @@ bool WrapperHandle::sync_entrys() {
     for(it = entries_buff.begin(); it != entries_buff.end();) {
         its = it;
         its ++;
-        sync_entries(it->first);
+        if (it->second.stat != metadata_status::read) {
+            sync_entries(it->first);
+        }
         it = its;
     }
     return true;
@@ -105,7 +118,7 @@ bool WrapperHandle::sync_entrys() {
 
 bool WrapperHandle::sync_entries(std::string key) {
 
-    if( entries_buff[key].stat == metadata_status::write) {
+    if( entries_buff[key].stat >= metadata_status::create) {
         return put_entries(key);
     }
 
@@ -120,8 +133,16 @@ void WrapperHandle::write_relation(std::string key, size_t &next_wrapper_id, met
     relation_buff[key].stat = state;
 }
 
-void  WrapperHandle::change_relation_stat(std::string key, metadata_status state) {
-    relation_buff[key].stat = state;
+bool  WrapperHandle::change_relation_stat(std::string key, metadata_status state) {
+
+    if(state == metadata_status::remove & relation_buff[key].stat == create) {
+        relation_buff.erase(key);
+        sync_relation(key);
+        return false;
+    } else {
+        relation_buff[key].stat = state;
+        return true;
+    }
 }
 
 bool WrapperHandle::get_relation(std::string key, size_t &next_wrapper_id) {
@@ -219,7 +240,9 @@ bool WrapperHandle::sync_relations() {
     for(it = relation_buff.begin(); it != relation_buff.end();) {
         its = it;
         its ++;
-        sync_relation(it->first);
+        if(it->second.stat != metadata_status::read) {
+            sync_relation(it->first);
+        }
         it = its;
     }
     return true;
@@ -228,7 +251,7 @@ bool WrapperHandle::sync_relations() {
 
 bool WrapperHandle::sync_relation(std::string key) {
     
-    if(relation_buff[key].stat == metadata_status::write) {
+    if(relation_buff[key].stat >= metadata_status::create) {
         return put_relation(key, relation_buff[key].next_wrapper_id);
     }
 
@@ -240,8 +263,18 @@ bool WrapperHandle::sync_relation(std::string key) {
 
 
 
-void WrapperHandle::change_stat(std::string key, metadata_status state) {
-    location_buff[key].stat = state;
+bool WrapperHandle::change_stat(std::string key, metadata_status state) {
+
+    if(state == metadata_status::remove & location_buff[key].stat == metadata_status::create) {
+        if(location_buff[key].lh) {
+            delete location_buff[key].lh;
+        }
+        location_buff.erase(key);
+        return false;
+    } else {
+        location_buff[key].stat = state;
+        return true;
+    }
 }
 
 void WrapperHandle::write_location(std::string key, struct location_header* &lh, metadata_status state) {
@@ -312,7 +345,9 @@ bool WrapperHandle::sync_locations() {
     for(it = location_buff.begin(); it != location_buff.end();) {
         its = it;
         its ++;
-        sync_location(it->first);
+        if(it->second.stat != metadata_status::read) {
+            sync_location(it->first);
+        }
         it = its;
     }
     return true;
@@ -320,7 +355,7 @@ bool WrapperHandle::sync_locations() {
 
 bool WrapperHandle::sync_location(std::string key) {
 
-    if(location_buff[key].stat == metadata_status::write) {
+    if(location_buff[key].stat >= metadata_status::create) {
         return put_location(key);
     }
 

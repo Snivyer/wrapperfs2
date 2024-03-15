@@ -21,6 +21,8 @@ namespace wrapperfs {
 using ATTR_LIST = std::vector<std::pair<std::string, size_t>>;
 using ATTR_STR_LIST = std::vector<std::pair<std::string, std::string>>;
 
+static const size_t MAX_PATH_NAME = 256;
+
 enum wrapper_tag {
     directory_relation,
 };
@@ -40,151 +42,68 @@ struct entry_key {
 struct entry_value {
     size_t size;
     char* entry;
+    std::unordered_map<std::string, size_t>* vmap;
 
-    entry_value(): size(0), entry(nullptr) {
+    entry_value() {
+        size = 0;
+        vmap = new std::unordered_map<std::string, size_t>;
     }
 
     entry_value(std::string &val) {
         size = val.size();
         entry = new char[size];
         memcpy(entry, val.data(), size);
-
+        vmap = new std::unordered_map<std::string, size_t>;
+        ToMap();
     }
 
     ~entry_value() {
         if(entry != nullptr && size != 0) {
             delete entry;
+            delete vmap;
             size = 0;
         }
     }
 
-    std::string ToString() {
-        return std::string(entry, size);
-    }
 
-    bool push(std::string str, size_t ino) {
-        size_t new_size = size + str.size() + 1 + sizeof(size_t);
-        char* new_entry = new char[new_size];
-
-        if(entry != NULL) {
-            memcpy(new_entry, entry, size);
-            delete entry;
-        }
-
-        memcpy(new_entry + size, str.data(), str.size());
-        new_entry[size + str.size()] = '\0';
-        memcpy(new_entry + size + str.size() + 1, &ino, sizeof(size_t));
-        entry = new_entry;
-        size = new_size;
-        return true;
-    }
-
-    bool find(std::string str, size_t &ino) {
-
-        if(size == 0) {
-            return false;
-        }
-
-        char* entry_back = entry;
-        while (strcmp(entry_back, str.data()) != 0) {
-      
-            size_t len = strlen(entry_back);
-            entry_back += len + 1 + sizeof(size_t);
-
-            if(entry_back >= entry + size) {
-                return false;
-            }
-        }
-
-        memcpy(&ino, entry_back + str.size() + 1, sizeof(size_t));
-        return true;
-    }
-
-    bool remove(std::string str) {
-
-        if(size == 0) {
-            return false;
-        }
-
-        char* entry_back = entry;
-        while (strcmp(entry_back, str.data()) != 0) {
-      
-            size_t len = strlen(entry_back);
-            entry_back += len + 1 + sizeof(size_t);
-
-            if(entry_back >= entry + size) {
-                return false;
-            }
-        }
-
-        size_t start = str.size() + 1 + sizeof(size_t);
-        size_t skip = entry_back - entry; 
-        memcpy(entry_back, entry_back + start, size - start - skip);
-        size -= start;
-        return true;
-    }
-
-    bool ToList(std::vector<std::pair<std::string, size_t>> &list) {
-
-        if(size == 0) {
-            return false;
-        }
-
+    void ToMap() {
+    
         char* entry_back = entry;
         size_t count = 0;
         while(count != size) {
-            size_t len = strlen(entry_back);
             std::string str = std::string(entry_back);
             size_t ino;
-            memcpy(&ino, entry_back + len + 1, sizeof(size_t));
-            std::pair<std::string, size_t> p;
-            p.first = str;
-            p.second = ino;
-            list.push_back(p);
-            count += len + 1 + sizeof(size_t);
-            entry_back += len + 1 + sizeof(size_t);
+            memcpy(&ino, entry_back + MAX_PATH_NAME, sizeof(size_t));
+            vmap->insert({str,ino});
+            count += MAX_PATH_NAME + sizeof(size_t);
+            entry_back += MAX_PATH_NAME + sizeof(size_t);
         }
 
-        return true;
     }
 
-    bool ToList(std::vector<std::string> &list) {
+    std::string ToString() {
 
         if(size == 0) {
-            return false;
+            return std::string(nullptr, 0);
         }
 
-        char* entry_back = entry;
-        size_t count = 0;
-        while(count != size) {
-            size_t len = strlen(entry_back);
-            std::string str = std::string(entry_back);
-            list.push_back(str);
-            count += len + 1 + sizeof(size_t);
-            entry_back += len + 1 + sizeof(size_t);
-        }
-        return true;
-    }
-
-    std::string ToString(std::vector<std::pair<std::string, size_t>> &list) {
-        size_t count = 0;
-        for(auto item: list) {
-            count += item.first.size();
-            count += 1 + sizeof(size_t);
+        if(size > 0) {
+            delete entry;
+            size = 0;
         }
 
-        size = count;
+        size = vmap->size() * (MAX_PATH_NAME + sizeof(size_t));
         entry = new char[size];
         char* entry_back = entry;
-        for(auto item: list) {
+        for (auto item: (*vmap)) {
             memcpy(entry_back, item.first.data(), item.first.size());
-            entry_back += item.first.size();
             entry_back[0] = '\0';
-            entry_back += 1;
+            entry_back += MAX_PATH_NAME;
             memcpy(entry_back, &item.second, sizeof(size_t));
             entry_back += sizeof(size_t);
         }
-        return ToString();
+
+        return std::string(entry, size);
     }
 };
 
@@ -272,14 +191,14 @@ public:
     ~WrapperHandle();
 
     void write_entries(std::string key, entry_value* &eval, metadata_status stat = metadata_status::write);
-    void change_entries_stat(std::string key, metadata_status state = metadata_status::write);
+    bool change_entries_stat(std::string key, metadata_status state = metadata_status::write);
     bool get_entries(std::string key, entry_value* &eval);
     bool sync_entries(std::string key);
     bool sync_entrys();
 
 
     void write_relation(std::string key, size_t &next_wrapper_id, metadata_status stat = metadata_status::write);
-    void change_relation_stat(std::string key, metadata_status state = metadata_status::write);
+    bool change_relation_stat(std::string key, metadata_status state = metadata_status::write);
     bool get_relation(std::string key, size_t &next_wrapper_id);
     bool get_relations(relation_key &key, ATTR_STR_LIST &list);
     bool sync_relation(std::string key);
@@ -287,7 +206,7 @@ public:
     
     bool get_location(std::string key, struct location_header* &lh);
     void write_location(std::string key, struct location_header* &lh, metadata_status state = metadata_status::write);
-    void change_stat(std::string key, metadata_status state = metadata_status::write);
+    bool change_stat(std::string key, metadata_status state = metadata_status::write);
     bool sync_location(std::string key);
     bool sync_locations();
 

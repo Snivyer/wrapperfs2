@@ -15,3 +15,7 @@ wrapperfs2 is the new version of wrappers.
 2024-3-9 add relation_read_cache.
 
 2024-3-10 add location_write_buff and rnode_write_buff.
+
+2024-3-13 add sycn 
+
+2024-3-15 delete create stauts, and sycn deleted metatadata in time. 
