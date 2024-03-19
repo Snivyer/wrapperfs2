@@ -441,9 +441,9 @@ int wrapperfs::Unlink(const char *path) {
        // eval->remove(filename);
         wrapper_handle->change_entries_stat(ekey.ToString());
 
-        if (rnode_handle->change_stat(ino, metadata_status::remove)) {
-            //std::async(std::launch::async, &RnodeHandle::sync, this->rnode_handle, ino);
-        }
+        rnode_handle->change_stat(ino, metadata_status::remove);
+        //std::async(std::launch::async, &RnodeHandle::sync, this->rnode_handle, ino);
+        
 
         is_remove = true;
     }
@@ -617,24 +617,25 @@ int wrapperfs::RemoveDir(const char *path) {
     // 删除relation
     struct relation_key rkey;
     BuildRelationKey(wrapper_id, filename, rkey);
-    wrapper_handle->change_relation_stat(rkey.ToString(), metadata_status::remove);
+    if (wrapper_handle->change_relation_stat(rkey.ToString(), metadata_status::remove)) {
         //std::async(std::launch::async, &WrapperHandle::sync_relation, this->wrapper_handle, rkey.ToString());
-        //wrapper_handle->sync_relation(rkey);
+        wrapper_handle->sync_relation(rkey.ToString());
+    }
+
+
 
 
     struct location_key lkey;
     BuildLocationKey(pc_id, lkey);
-    if(wrapper_handle->change_stat(lkey.ToString(), metadata_status::remove)) {
-        //std::async(std::launch::async, &WrapperHandle::sync_location, this->wrapper_handle, lkey.ToString());
-    }
+    wrapper_handle->change_stat(lkey.ToString(), metadata_status::remove);
+    //std::async(std::launch::async, &WrapperHandle::sync_location, this->wrapper_handle, lkey.ToString());
 
   
     // 删除entries
     struct entry_key key;
     BuildEntryKey(pc_id, key);
-    if(wrapper_handle->change_entries_stat(key.ToString(), metadata_status::remove)) {
-        //std::async(std::launch::async, &WrapperHandle::sync_entries, this->wrapper_handle, key.ToString());
-    }
+    wrapper_handle->change_entries_stat(key.ToString(), metadata_status::remove);
+    //std::async(std::launch::async, &WrapperHandle::sync_entries, this->wrapper_handle, key.ToString());
     return 0;
 }
 
@@ -858,9 +859,11 @@ int wrapperfs::Rename(const char* source, const char* dest) {
         size_t pc_id;
         BuildRelationKey(source_wrapper_id, source_filename, key);
         wrapper_handle->get_relation(key.ToString(), pc_id);
-        wrapper_handle->change_relation_stat(key.ToString(), metadata_status::remove);
-            //std::async(std::launch::async, &WrapperHandle::sync_relation, this->wrapper_handle, key.ToString());
-            //wrapper_handle->sync_relation(key.ToString());
+        if(wrapper_handle->change_relation_stat(key.ToString(), metadata_status::remove)) {
+            // std::async(std::launch::async, &WrapperHandle::sync_relation, this->wrapper_handle, key.ToString());
+            wrapper_handle->sync_relation(key.ToString());
+        }   
+       
         
    
         // step2: 添加dest的relation

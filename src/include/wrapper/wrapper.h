@@ -46,6 +46,7 @@ struct entry_value {
 
     entry_value() {
         size = 0;
+        entry = new char;
         vmap = new std::unordered_map<std::string, size_t>;
     }
 
@@ -67,7 +68,7 @@ struct entry_value {
 
 
     void ToMap() {
-    
+
         char* entry_back = entry;
         size_t count = 0;
         while(count != size) {
@@ -82,10 +83,6 @@ struct entry_value {
     }
 
     std::string ToString() {
-
-        if(size == 0) {
-            return std::string(nullptr, 0);
-        }
 
         if(size > 0) {
             delete entry;
